@@ -2709,7 +2709,7 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
 
             {showForm && userId && (
               <TransactionForm
-                key={formKey}
+                key={`${editingTx?.id ?? (filter === 'all' ? 'sale' : filter)}-${formKey}`}
                 userId={userId}
                 initial={editingTx ?? undefined}
                 type={editingTx?.type ?? (filter === 'all' ? 'sale' : filter)}
