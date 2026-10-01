@@ -108,7 +108,7 @@ function amountText(n: number | null | undefined): string {
 // columns need about this much window to fit beside the sidebar - narrower
 // than that and the table falls back to the compact four-column form rather
 // than cutting off Cash in / Cash out / Balance.
-const COL = { time: 58, type: 104, invoice: 84, discount: 76, amount: 92, cashIn: 96, cashOut: 96, balance: 104 };
+const COL = { time: 58, type: 104, invoice: 96, discount: 76, amount: 104, cashIn: 100, cashOut: 100, balance: 112 };
 const FULL_TABLE_MIN_WINDOW = 1280;
 
 function TypePill({ kind }: { kind: Kind }) {
@@ -146,6 +146,7 @@ function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, onOpenR
     <Text
       className={`${cell} text-right text-[12.5px] ${bold ? 'font-bold' : 'font-medium'}`}
       style={[style, { color: value == null ? '#9CA3AF' : color }]}
+      numberOfLines={1}
     >
       {value == null ? '—' : money(value)}
     </Text>
@@ -968,7 +969,7 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
   return (
     <ScrollView
       className="flex-1 bg-gray-50"
-      contentContainerStyle={{ padding: wide ? 32 : 12, paddingTop: wide ? 24 : 12, paddingBottom: 48, gap: 14 }}
+      contentContainerStyle={{ padding: wide ? 24 : 12, paddingTop: wide ? 24 : 12, paddingBottom: 48, gap: 14 }}
     >
       {header}
 

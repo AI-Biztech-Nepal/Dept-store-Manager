@@ -15,6 +15,15 @@ import { BankAccountPickerModal } from './BankAccountPickerModal';
 import { ContactPickerModal } from '../ContactPickerModal';
 import { ToggleSwitch } from '../ToggleSwitch';
 import { FormSection } from './FormSection';
+import { BillItemsTable, type BillItemsTableHandle } from './BillItemsTable';
+import { KeyboardDateInput } from './KeyboardDateInput';
+import { KeyInput } from './KeyInput';
+import { useConfirmSave } from './ConfirmSave';
+import { TransactionsBook } from './TransactionsBook';
+import { FINANCE_ENTRY_ACCENT, FINANCE_ENTRY_SHADOW } from './entryTheme';
+import { SuggestInput, type SuggestOption } from './SuggestInput';
+import { buildCustomerSuggestions, type CustomerSuggestion } from '../../utils/customerSuggestions';
+import { readKey } from '../../utils/webKeys';
 import { showAlert, getErrorMessage } from '../../utils/alert';
 import { toBsLabel, toBsHistoryLabel } from '../../utils/nepaliDate';
 import type {
@@ -532,6 +541,7 @@ function TransactionForm({
   onCancel: () => void;
 }) {
   const createTx = useSupabaseInsert('business_transactions');
+  const { confirm: confirmSave, dialog: confirmDialog } = useConfirmSave();
   const updateTx = useSupabaseUpdate('business_transactions');
   const { data: categories } = useSupabaseQuery('expense_categories', {
     filters: { owner_id: userId },
@@ -578,6 +588,13 @@ function TransactionForm({
   // doesn't imply the other.
   const initialSubtotal = initial ? initial.items.reduce((sum, i) => sum + i.amount, 0) : 0;
   const [discountAmountInput, setDiscountAmountInput] = useState(initial ? String(initial.discount_amount) : '0');
+  // Web: the discount can be typed as a percent of the subtotal or as an NPR
+  // amount - whichever was typed last drives the other, so a percent keeps
+  // following the subtotal as items change. Native only ever uses the amount.
+  const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>(
+    Platform.OS === 'web' && !initial ? 'percent' : 'amount'
+  );
+  const [discountPercentInput, setDiscountPercentInput] = useState('');
   // Defaults to 0 (not 13) for a brand-new bill - the VAT row itself starts
   // collapsed, but the percent still fed into vatAmount even while
   // collapsed, so every new Sale/Purchase silently had 13% VAT baked into
@@ -606,8 +623,23 @@ function TransactionForm({
 
   const isBill = type !== 'expense';
   const subtotal = items.filter(isSavableItem).reduce((sum, row) => sum + lineTotal(row), 0);
-  const discountAmount = Number(discountAmountInput) || 0;
+  const discountAmount =
+    discountMode === 'percent'
+      ? Math.round((subtotal * Math.min(Number(discountPercentInput) || 0, 100)) / 100)
+      : Number(discountAmountInput) || 0;
   const discountPercentDisplay = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
+  // Flips the single discount box between a percent and an NPR amount, carrying
+  // the value across so what is on screen never changes meaning under the user.
+  function setDiscountUnit(unit: 'percent' | 'amount') {
+    if (unit === discountMode) return;
+    if (unit === 'amount') {
+      setDiscountAmountInput(String(discountAmount));
+    } else {
+      setDiscountPercentInput(subtotal > 0 && discountAmount > 0 ? String(Math.round(discountPercentDisplay * 100) / 100) : '');
+    }
+    setDiscountMode(unit);
+  }
+  const discountInputValue = discountMode === 'percent' ? discountPercentInput : discountAmountInput;
   const vatAmount = Math.round(((subtotal - discountAmount) * (Number(vatPercent) || 0)) / 100);
   const grandTotal = subtotal - discountAmount + vatAmount;
   const selectedCategory = (categories ?? []).find((c) => c.id === categoryId) ?? null;
@@ -736,6 +768,7 @@ function TransactionForm({
   }
 
   async function handleSave() {
+    if (saving) return;
     if (isBill) {
       const validItems = items.filter(isSavableItem);
       if (validItems.length === 0) {
@@ -746,20 +779,47 @@ function TransactionForm({
         showAlert('Check the total', 'The grand total must be more than zero — check item amounts and discount/VAT.');
         return;
       }
-      if (!customerId) {
+      if (!customerId && !partyName.trim()) {
         showAlert(
           type === 'purchase' ? 'Pick a vendor' : 'Pick a customer',
           `Every ${type} books against a real ${type === 'purchase' ? 'vendor' : 'customer'}'s ledger now — tap the ${type === 'purchase' ? 'Vendor' : 'Customer'} field above and choose or add one.`
         );
         return;
       }
+      const ok = await confirmSave({
+        title: `${initial ? 'Save changes to this' : 'Save this'} ${TYPE_META[type].label.toLowerCase()}?`,
+        rows: [
+          { label: type === 'purchase' ? 'Vendor' : 'Customer', value: partyName.trim() },
+          { label: 'Items', value: String(validItems.length) },
+          ...(billNo.trim() ? [{ label: 'Bill no.', value: billNo.trim() }] : []),
+          ...(discountAmount > 0 ? [{ label: 'Discount', value: `− NPR ${discountAmount.toLocaleString()}` }] : []),
+          ...(vatAmount > 0 ? [{ label: 'VAT', value: `+ NPR ${vatAmount.toLocaleString()}` }] : []),
+        ],
+        total: { label: 'Grand total', value: `NPR ${grandTotal.toLocaleString()}` },
+      });
+      if (!ok) return;
       setSaving(true);
       try {
+        // A name typed in full without picking it from the list still means
+        // the saved party of that name - and a brand-new name is saved as a
+        // new customer/vendor on the spot, same as Quick Payment does.
+        let resolvedCustomerId = customerId;
+        if (!resolvedCustomerId) {
+          const typed = partyName.trim();
+          const existing = customers.find((c) => c.name.trim().toLowerCase() === typed.toLowerCase());
+          if (existing) {
+            resolvedCustomerId = existing.id;
+          } else {
+            const created = await createCustomer.mutateAsync({ owner_id: userId, name: typed, phone: null });
+            resolvedCustomerId = created.id;
+          }
+          setCustomerId(resolvedCustomerId);
+        }
         const values = {
           type,
           amount: grandTotal,
           party_name: partyName.trim() || null,
-          customer_id: customerId,
+          customer_id: resolvedCustomerId,
           note: note.trim() || null,
           bill_no: billNo.trim() || null,
           bill_date: billDate || null,
@@ -779,6 +839,25 @@ function TransactionForm({
         } else {
           await createTx.mutateAsync({ owner_id: userId, ...values });
         }
+        // The typeahead lets an item be typed straight into the bill; one
+        // that isn't in the catalog yet is remembered for next time, like
+        // "Add as new item" in the picker popup does.
+        if (Platform.OS === 'web') {
+          const known = new Set([
+            ...products.map((p) => p.name.trim().toLowerCase()),
+            ...(financeItems ?? []).map((f) => f.name.trim().toLowerCase()),
+          ]);
+          for (const r of validItems) {
+            const name = r.description.trim();
+            if (!name || known.has(name.toLowerCase())) continue;
+            known.add(name.toLowerCase());
+            try {
+              await createFinanceItem.mutateAsync({ owner_id: userId, name, rate: Number(r.rate) || null });
+            } catch {
+              // The bill itself is saved - a failed remember-for-later isn't worth blocking on.
+            }
+          }
+        }
         onDone();
       } catch (err) {
         showAlert('Could not save', getErrorMessage(err));
@@ -793,6 +872,16 @@ function TransactionForm({
       showAlert('Enter an amount', 'Add a valid amount in NPR.');
       return;
     }
+    const ok = await confirmSave({
+      title: `${initial ? 'Save changes to this' : 'Save this'} expense?`,
+      rows: [
+        ...(partyName.trim() ? [{ label: 'Paid to', value: partyName.trim() }] : []),
+        ...(selectedCategory ? [{ label: 'Category', value: selectedCategory.name }] : []),
+        { label: 'Paid via', value: selectedAccountName },
+      ],
+      total: { label: 'Amount', value: `NPR ${value.toLocaleString()}` },
+    });
+    if (!ok) return;
     setSaving(true);
     try {
       const values = {
@@ -873,6 +962,7 @@ function TransactionForm({
           ...scanned.items.map((i) => ({ description: i.description, qty: String(i.qty), rate: String(i.rate) })),
         ]);
         if (scanned.discount_amount) {
+          setDiscountMode('amount');
           setDiscountAmountInput(String(scanned.discount_amount));
           setShowDiscount(true);
         }
@@ -986,6 +1076,20 @@ function TransactionForm({
       showAlert('Add an expense', 'Add at least one expense with a valid amount.');
       return;
     }
+    const sum = validRows.reduce((s, r) => s + Number(r.amount), 0);
+    const ok = await confirmSave({
+      title: `Save ${validRows.length === 1 ? 'this' : `these ${validRows.length}`} expense${validRows.length === 1 ? '' : 's'}?`,
+      rows: [
+        ...validRows.slice(0, 5).map((r) => {
+          const cat = (categories ?? []).find((c) => c.id === r.categoryId)?.name;
+          return { label: `${r.partyName.trim() || 'Expense'}${cat ? ' · ' + cat : ''}`, value: `NPR ${Number(r.amount).toLocaleString()}` };
+        }),
+        ...(validRows.length > 5 ? [{ label: `+ ${validRows.length - 5} more` }] : []),
+        { label: 'Paid via', value: selectedAccountName },
+      ],
+      total: { label: 'Total', value: `NPR ${sum.toLocaleString()}` },
+    });
+    if (!ok) return;
     setSaving(true);
     try {
       for (const row of validRows) {
@@ -1016,13 +1120,52 @@ function TransactionForm({
     }
   }
 
+  // Web Sale/Purchase form only: refs for the keyboard walk between fields,
+  // the vendor typeahead, and an always-present blank last item row (typing
+  // into it adds the next one, so there is never an "Add item" to reach for).
+  const vendorRef = useRef<TextInput | null>(null);
+  const billNoRef = useRef<TextInput>(null);
+  const billDateRef = useRef<TextInput>(null);
+  const discountRef = useRef<TextInput>(null);
+  const vatRef = useRef<TextInput>(null);
+  const remarkRef = useRef<TextInput>(null);
+  const saveButtonRef = useRef<View>(null);
+  const itemsTableRef = useRef<BillItemsTableHandle>(null);
+  const [vendorFocused, setVendorFocused] = useState(false);
+
+  const vendorSuggestions = useMemo<CustomerSuggestion[]>(() => {
+    if (!vendorFocused || !isBill) return [];
+    const q = partyName.trim();
+    if (!q) return [];
+    if (customerId && customers.find((c) => c.id === customerId)?.name === partyName) return [];
+    return buildCustomerSuggestions(customers, phoneContacts.contacts, q, 6);
+  }, [vendorFocused, isBill, partyName, customerId, customers, phoneContacts.contacts]);
+
+  const vendorOptions = useMemo<SuggestOption[]>(
+    () =>
+      vendorSuggestions.map((s) => ({
+        key: s.key,
+        label: s.name,
+        hint: s.customer ? (s.phone ?? 'Saved') : 'From contacts',
+      })),
+    [vendorSuggestions]
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !isBill) return;
+    const last = items[items.length - 1];
+    if (!last || last.description.trim() || last.qty.trim() || last.rate.trim()) {
+      setItems((prev) => [...prev, { description: '', qty: '', rate: '' }]);
+    }
+  }, [items, isBill]);
+
   if (Platform.OS === 'web' && type === 'expense' && !initial) {
     return (
       <View className="mb-4">
         <View className="mb-4 flex-row" style={{ gap: 24 }}>
-          <View className="flex-1" style={{ minWidth: 0, maxWidth: 720 }}>
+          <View className="flex-1" style={{ minWidth: 0, maxWidth: 1500 }}>
             <View className="mb-5 flex-row items-center justify-between">
-              <Text className="text-lg font-bold" style={{ color: TYPE_META.expense.color }}>
+              <Text className="text-lg font-bold" style={{ color: FINANCE_ENTRY_ACCENT }}>
                 New Expenses
               </Text>
               <Pressable
@@ -1118,8 +1261,8 @@ function TransactionForm({
               })}
 
               <Pressable onPress={addExpenseRow} className="mt-2 flex-row items-center gap-1.5 self-start">
-                <Ionicons name="add-circle-outline" size={16} color={TYPE_META.expense.color} />
-                <Text className="text-sm font-semibold" style={{ color: TYPE_META.expense.color }}>
+                <Ionicons name="add-circle-outline" size={16} color={FINANCE_ENTRY_ACCENT} />
+                <Text className="text-sm font-semibold" style={{ color: FINANCE_ENTRY_ACCENT }}>
                   Add expense
                 </Text>
               </Pressable>
@@ -1132,7 +1275,7 @@ function TransactionForm({
                   onPress={handleSaveAllExpenses}
                   disabled={saving}
                   className="flex-1 items-center rounded-xl py-3 disabled:opacity-50"
-                  style={{ backgroundColor: TYPE_META.expense.color }}
+                  style={{ backgroundColor: FINANCE_ENTRY_ACCENT }}
                 >
                   <Text className="text-sm font-bold text-white">{saving ? 'Saving…' : 'Save'}</Text>
                 </Pressable>
@@ -1141,9 +1284,11 @@ function TransactionForm({
           </View>
 
           <View style={{ width: 320 }}>
-            <RecentEntriesCard userId={userId} type="expense" color={TYPE_META.expense.color} />
+            <RecentEntriesCard userId={userId} type="expense" color={FINANCE_ENTRY_ACCENT} />
           </View>
         </View>
+
+        {confirmDialog}
 
         <ContactPickerModal
           visible={activePartyRowKey != null}
@@ -1187,16 +1332,15 @@ function TransactionForm({
   // same ones the original single-column return further down uses -
   // nothing here is a separate calculation.
   if (Platform.OS === 'web' && isBill) {
-    const accent = TYPE_META[type].color;
-    const accentDark = type === 'purchase' ? '#1D4ED8' : '#047857';
-    const accentShadow = type === 'purchase' ? 'rgba(37,99,235,0.35)' : 'rgba(5,150,105,0.35)';
+    const accent = FINANCE_ENTRY_ACCENT;
+    const accentShadow = FINANCE_ENTRY_SHADOW;
     const partyLabel = type === 'purchase' ? 'Vendor' : 'Customer';
 
     return (
       <View className="mb-4">
         <View className="mb-4 flex-row" style={{ gap: 24 }}>
-          <View className="flex-1" style={{ minWidth: 0, maxWidth: 720 }}>
-            <View className="mb-5 flex-row items-center justify-between">
+          <View className="flex-1" style={{ minWidth: 0, maxWidth: 1500 }}>
+            <View className="mb-4 flex-row items-center justify-between">
               <Text className="text-lg font-bold" style={{ color: accent }}>
                 {initial ? `Edit ${TYPE_META[type].label}` : `New ${TYPE_META[type].label}`}
               </Text>
@@ -1210,223 +1354,290 @@ function TransactionForm({
               </Pressable>
             </View>
 
-            <View className="mb-5 rounded-2xl border border-gray-200 bg-white p-5">
-              <FormSection icon="person-outline" title={partyLabel} first>
-                <View className="mb-1 flex-row items-center gap-2">
-                  <Pressable
-                    onPress={() => {
-                      phoneContacts.request();
-                      setPartyPickerQuery('');
-                      setShowPartyPicker(true);
+            {/* Vendor, bill number and date share one row - everything that
+                identifies the bill - and the whole form is keyboard-driven:
+                Tab/Enter walk Vendor -> Bill No. -> Date -> Items -> Discount
+                -> VAT -> Remark -> Save, Ctrl+Enter saves from anywhere. */}
+            <View
+              className="mb-4 rounded-2xl border border-gray-200 bg-white px-5 py-4"
+              style={{ boxShadow: '0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.03)', zIndex: 20 }}
+            >
+              <View className="flex-row" style={{ gap: 14 }}>
+                <View style={{ flex: 1.7, minWidth: 0 }}>
+                  <View className="mb-1.5 flex-row items-center justify-between">
+                    <Text className="text-xs font-semibold text-gray-600">{partyLabel}</Text>
+                    {!!customerId && (
+                      <Pressable
+                        onPress={() => {
+                          setRenamePartyValue(partyName);
+                          setShowRenameParty(true);
+                        }}
+                        tabIndex={-1}
+                        hitSlop={8}
+                        accessibilityLabel={`Rename ${partyLabel.toLowerCase()}`}
+                      >
+                        <Ionicons name="pencil-outline" size={13} color="#9CA3AF" />
+                      </Pressable>
+                    )}
+                  </View>
+                  <SuggestInput
+                    value={partyName}
+                    onChangeText={(v) => {
+                      setPartyName(v);
+                      if (customerId) {
+                        const linked = customers.find((c) => c.id === customerId);
+                        if (!linked || linked.name !== v) setCustomerId(null);
+                      }
                     }}
-                    className="flex-1 flex-row items-center justify-between rounded-lg border border-gray-300 bg-white px-3 py-2.5"
-                  >
-                    <Text className={`flex-1 text-sm ${partyName ? 'text-gray-900' : 'text-gray-400'}`} numberOfLines={1}>
-                      {partyName || (type === 'purchase' ? 'Vendor/supplier name' : 'Party name')}
-                    </Text>
-                    <Ionicons name="chevron-down" size={16} color="#9CA3AF" />
-                  </Pressable>
-                  {!!customerId && (
-                    <Pressable
-                      onPress={() => {
-                        setRenamePartyValue(partyName);
-                        setShowRenameParty(true);
-                      }}
-                      hitSlop={8}
-                      className="rounded-lg border border-gray-300 bg-white p-2.5"
-                    >
-                      <Ionicons name="pencil-outline" size={16} color="#6B7280" />
-                    </Pressable>
-                  )}
+                    options={vendorOptions}
+                    onSelectOption={async (opt, via) => {
+                      const s = vendorSuggestions.find((x) => x.key === opt.key);
+                      if (!s) return;
+                      if (via !== 'tab') billNoRef.current?.focus();
+                      if (s.customer) {
+                        setPartyName(s.name);
+                        setCustomerId(s.customer.id);
+                      } else {
+                        await handleSelectPartyNew(s.name, s.phone);
+                      }
+                    }}
+                    inputRef={(el) => {
+                      vendorRef.current = el;
+                    }}
+                    onFocus={() => setVendorFocused(true)}
+                    onBlur={() => setVendorFocused(false)}
+                    onKeyPress={(e) => {
+                      const k = readKey(e);
+                      if (k.key !== 'Enter') return;
+                      k.prevent();
+                      if (k.ctrl) handleSave();
+                      else billNoRef.current?.focus();
+                    }}
+                    placeholder={type === 'purchase' ? 'Vendor / supplier name' : 'Customer name'}
+                    accessibilityLabel={partyLabel}
+                    autoFocus={!initial}
+                    accent={accent}
+                    inputClassName="rounded-lg px-3 py-2.5 text-sm font-semibold text-gray-900"
+                    inputStyle={[
+                      { borderWidth: 1, borderColor: vendorFocused ? accent : '#D1D5DB', backgroundColor: '#FFFFFF' },
+                      vendorFocused ? { boxShadow: `0 0 0 3px ${accent}29` } : null,
+                      { outlineStyle: 'none' } as object,
+                    ]}
+                    adornmentWidth={54}
+                    adornment={
+                      customerId ? (
+                        <Ionicons name="checkmark-circle" size={16} color={accent} />
+                      ) : partyName.trim() ? (
+                        <Text className="text-[10px] font-bold uppercase text-gray-400">New</Text>
+                      ) : null
+                    }
+                  />
                 </View>
-                {showRenameParty && (
-                  <View className="mb-1 flex-row items-center gap-2">
-                    <TextInput
-                      value={renamePartyValue}
-                      onChangeText={setRenamePartyValue}
-                      autoFocus
-                      placeholder="Name"
-                      placeholderTextColor="#9CA3AF"
-                      className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-                    />
-                    <Pressable onPress={handleRenameParty} disabled={renamingParty} hitSlop={8}>
-                      <Ionicons name="checkmark-circle" size={22} color="#059669" />
-                    </Pressable>
-                    <Pressable onPress={() => setShowRenameParty(false)} hitSlop={8}>
-                      <Ionicons name="close-circle" size={22} color="#9CA3AF" />
-                    </Pressable>
-                  </View>
-                )}
-                <Text className="text-[11px] text-gray-400">
-                  Required — this bill books against their ledger. Tap to search your saved customers and phone
-                  contacts, or the pencil to fix a name.
-                </Text>
-              </FormSection>
-
-              <FormSection icon="document-text-outline" title="Details">
-                <View className="flex-row gap-3">
-                  <View className="flex-1">
-                    <Text className="mb-1 text-xs font-medium text-gray-500">Bill No.</Text>
-                    <TextInput
-                      value={billNo}
-                      onChangeText={setBillNo}
-                      placeholder="e.g. 0234"
-                      placeholderTextColor="#9CA3AF"
-                      className="rounded-lg border border-gray-300 px-3 py-3 text-sm font-semibold text-gray-900"
-                    />
-                  </View>
-                  <View className="flex-1">
-                    <Text className="mb-1 text-xs font-medium text-gray-500">Bill date</Text>
-                    <DateField value={billDate} onChange={setBillDate} />
-                  </View>
+                <View style={{ flex: 0.8, minWidth: 0 }}>
+                  <Text className="mb-1.5 text-xs font-semibold text-gray-600">Bill No.</Text>
+                  <KeyInput
+                    value={billNo}
+                    onChangeText={setBillNo}
+                    inputRef={billNoRef}
+                    onEnter={() => billDateRef.current?.focus()}
+                    onRequestSave={handleSave}
+                    accent={accent}
+                    placeholder="e.g. 0234"
+                    accessibilityLabel="Bill number"
+                  />
                 </View>
-              </FormSection>
-            </View>
-
-            <View className="mb-5 rounded-2xl border border-gray-200 bg-white p-5">
-              <View className="mb-3 flex-row items-center gap-1.5">
-                <Ionicons name="cube-outline" size={13} color="#9CA3AF" />
-                <Text className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Items</Text>
+                <View style={{ flex: 1.1, minWidth: 0 }}>
+                  <Text className="mb-1.5 text-xs font-semibold text-gray-600">Bill date</Text>
+                  <KeyboardDateInput
+                    value={billDate}
+                    onChange={setBillDate}
+                    inputRef={billDateRef}
+                    accent={accent}
+                    onEnter={() => itemsTableRef.current?.focusRow(0, 0)}
+                    onRequestSave={handleSave}
+                  />
+                </View>
               </View>
-              {items.length === 0 && (
-                <Text className="mb-2 text-xs text-gray-400">No items yet — tap "Add item" below.</Text>
+              {showRenameParty && (
+                <View className="mt-3 flex-row items-center gap-2">
+                  <TextInput
+                    value={renamePartyValue}
+                    onChangeText={setRenamePartyValue}
+                    autoFocus
+                    placeholder="Name"
+                    placeholderTextColor="#9CA3AF"
+                    onKeyPress={(e) => {
+                      const k = readKey(e);
+                      if (k.key === 'Enter') {
+                        k.prevent();
+                        handleRenameParty();
+                      } else if (k.key === 'Escape') {
+                        k.prevent();
+                        setShowRenameParty(false);
+                      }
+                    }}
+                    className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+                  />
+                  <Pressable onPress={handleRenameParty} disabled={renamingParty} hitSlop={8}>
+                    <Ionicons name="checkmark-circle" size={22} color="#059669" />
+                  </Pressable>
+                  <Pressable onPress={() => setShowRenameParty(false)} hitSlop={8}>
+                    <Ionicons name="close-circle" size={22} color="#9CA3AF" />
+                  </Pressable>
+                </View>
               )}
-              {items.map((item, index) => (
-                <View key={index} className="mb-2 flex-row items-center gap-2 rounded-lg border border-gray-200 px-3 py-2">
-                  <Pressable onPress={() => openItemPicker(index)} className="flex-1" style={{ minWidth: 0 }}>
-                    <Text
-                      numberOfLines={1}
-                      className={`text-sm font-semibold ${item.description ? 'text-gray-900' : 'text-gray-400'}`}
-                    >
-                      {item.description || 'Tap to pick an item'}
-                    </Text>
-                  </Pressable>
-                  <TextInput
-                    value={item.qty}
-                    onChangeText={(v) => updateItem(index, { ...item, qty: v })}
-                    keyboardType="numeric"
-                    placeholder="Qty"
-                    placeholderTextColor="#9CA3AF"
-                    className="w-12 rounded border border-gray-300 py-1.5 text-center text-xs text-gray-900"
-                  />
-                  <Text className="text-[10px] text-gray-400">×</Text>
-                  <TextInput
-                    value={item.rate}
-                    onChangeText={(v) => updateItem(index, { ...item, rate: v })}
-                    keyboardType="numeric"
-                    placeholder="Rate"
-                    placeholderTextColor="#9CA3AF"
-                    className="w-16 rounded border border-gray-300 py-1.5 text-center text-xs text-gray-900"
-                  />
-                  <Text className="w-20 text-right text-sm font-bold text-gray-900">
-                    {lineTotal(item).toLocaleString()}
-                  </Text>
-                  <Pressable onPress={() => removeItem(index)} hitSlop={8}>
-                    <Ionicons name="close-circle" size={16} color="#D1D5DB" />
-                  </Pressable>
-                </View>
-              ))}
-              <Pressable onPress={() => openItemPicker(null)} className="mt-1 flex-row items-center gap-1.5 self-start">
-                <Ionicons name="add-circle-outline" size={16} color={accent} />
-                <Text className="text-sm font-semibold" style={{ color: accent }}>
-                  Add item
-                </Text>
-              </Pressable>
             </View>
 
-            <View className="rounded-2xl border border-gray-200 bg-white p-5">
-              <View className="mb-3 flex-row items-center gap-1.5">
-                <Ionicons name="calculator-outline" size={13} color="#9CA3AF" />
-                <Text className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Totals</Text>
-              </View>
-              <View className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3">
-                <View className="flex-row items-center justify-between py-2.5">
-                  <Text className="text-xs text-gray-500">Subtotal</Text>
-                  <Text className="text-xs font-semibold text-gray-700">NPR {subtotal.toLocaleString()}</Text>
-                </View>
-                <View className="flex-row items-center justify-between border-t border-gray-200 py-2.5">
-                  <Pressable
-                    onPress={() => {
-                      if (showDiscount) {
-                        setShowDiscount(false);
-                        setDiscountAmountInput('0');
-                      } else {
-                        setShowDiscount(true);
-                      }
-                    }}
-                    className="flex-row items-center gap-2"
-                  >
-                    <ToggleSwitch on={showDiscount} color={accent} />
-                    <Text className="text-xs font-semibold text-gray-700">Discount</Text>
-                  </Pressable>
-                  {showDiscount && (
-                    <View className="flex-row items-center gap-2">
-                      <TextInput
-                        value={discountAmountInput}
-                        onChangeText={setDiscountAmountInput}
-                        keyboardType="numeric"
-                        className="w-14 rounded border border-gray-300 bg-white px-1 py-1 text-center text-xs text-gray-900"
-                      />
-                      <Text className="w-9 text-[10px] text-gray-400">({discountPercentDisplay.toFixed(1)}%)</Text>
-                      <Text className="w-20 text-right text-xs font-semibold text-gray-700">
-                        − NPR {discountAmount.toLocaleString()}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <View className="flex-row items-center justify-between border-t border-gray-200 py-2.5">
-                  <Pressable
-                    onPress={() => {
-                      if (showVat) {
-                        setShowVat(false);
-                        setVatPercent('0');
-                      } else {
-                        setShowVat(true);
-                        setVatPercent((v) => (v === '0' ? '13' : v));
-                      }
-                    }}
-                    className="flex-row items-center gap-2"
-                  >
-                    <ToggleSwitch on={showVat} color={accent} />
-                    <Text className="text-xs font-semibold text-gray-700">VAT</Text>
-                  </Pressable>
-                  {showVat && (
-                    <View className="flex-row items-center gap-2">
-                      <TextInput
-                        value={vatPercent}
-                        onChangeText={setVatPercent}
-                        keyboardType="numeric"
-                        className="w-10 rounded border border-gray-300 bg-white px-1 py-1 text-center text-xs text-gray-900"
-                      />
-                      <Text className="w-9 text-[10px] text-gray-400">%</Text>
-                      <Text className="w-20 text-right text-xs font-semibold text-gray-700">
-                        + NPR {vatAmount.toLocaleString()}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-              <View className="mb-3.5 flex-row items-center justify-between rounded-lg bg-gray-50 px-3 py-2.5">
-                <Text className="text-sm font-bold text-gray-900">G. Total</Text>
-                <Text className="text-base font-extrabold text-gray-900">NPR {grandTotal.toLocaleString()}</Text>
-              </View>
-              <TextInput
-                value={note}
-                onChangeText={setNote}
-                placeholder="Remark (optional)"
-                placeholderTextColor="#9CA3AF"
-                className="mb-4 rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900"
-              />
+            <BillItemsTable
+              ref={itemsTableRef}
+              items={items}
+              products={products}
+              financeItems={financeItems ?? []}
+              accent={accent}
+              onUpdate={updateItem}
+              onRemove={removeItem}
+              onRequestSave={handleSave}
+              onExit={() => discountRef.current?.focus()}
+              footer={
+                <View
+                  className="flex-row flex-wrap border-t border-gray-200 bg-gray-50 px-5 py-4"
+                  style={{ columnGap: 28, rowGap: 14, borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}
+                >
+                  <View style={{ flex: 1, minWidth: 240 }}>
+                    <Text className="mb-1.5 text-xs font-semibold text-gray-600">Remark</Text>
+                    <KeyInput
+                      value={note}
+                      onChangeText={setNote}
+                      inputRef={remarkRef}
+                      onEnter={() => (saveButtonRef.current as unknown as { focus?: () => void } | null)?.focus?.()}
+                      onRequestSave={handleSave}
+                      accent={accent}
+                      placeholder="Optional"
+                      accessibilityLabel="Remark"
+                      className="rounded-lg px-3 py-2.5 text-sm text-gray-900"
+                    />
+                  </View>
 
-              <View className="flex-row gap-3 border-t border-gray-100 pt-4">
-                <Pressable onPress={onCancel} className="flex-1 items-center rounded-xl border border-gray-300 py-3">
+                  <View style={{ width: 320 }}>
+                    <View className="flex-row items-center justify-between py-1.5">
+                      <Text className="text-[13px] text-gray-500">Subtotal</Text>
+                      <Text className="text-[13px] font-semibold text-gray-700">NPR {subtotal.toLocaleString()}</Text>
+                    </View>
+                    <View className="flex-row items-center justify-between py-1">
+                      <Text className="text-[13px] text-gray-500">{discountMode === 'percent' ? 'Discount (%)' : 'Discount (Rs)'}</Text>
+                      <View className="flex-row items-center" style={{ gap: 8 }}>
+                        <View style={{ width: 84 }}>
+                          <KeyInput
+                            value={discountInputValue}
+                            onChangeText={(v) => {
+                              if (discountMode === 'percent') setDiscountPercentInput(Number(v) > 100 ? '100' : v);
+                              else setDiscountAmountInput(v);
+                            }}
+                            onKey={(k) => {
+                              if (k.ctrl || k.alt) return;
+                              const unit = k.key === '%' ? 'percent' : ['r', 'R', 'n', 'N'].includes(k.key) ? 'amount' : null;
+                              if (!unit) return;
+                              k.prevent();
+                              setDiscountUnit(unit);
+                              // The converted number comes up selected, so typing replaces it.
+                              setTimeout(() => (discountRef.current as unknown as HTMLInputElement | null)?.select?.(), 0);
+                            }}
+                            inputRef={discountRef}
+                            onEnter={() => vatRef.current?.focus()}
+                            onRequestSave={handleSave}
+                            accent={accent}
+                            numeric
+                            align="right"
+                            placeholder="0"
+                            accessibilityLabel={discountMode === 'percent' ? 'Discount percent' : 'Discount in NPR'}
+                            className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-gray-900"
+                          />
+                        </View>
+                        <View
+                          className="flex-row overflow-hidden rounded-md border border-gray-300 bg-white"
+                          style={{ width: 42 }}
+                          accessibilityLabel="Discount unit: percent or rupees (press % or R in the box)"
+                        >
+                          {(
+                            [
+                              ['percent', '%'],
+                              ['amount', 'Rs'],
+                            ] as const
+                          ).map(([unit, label]) => {
+                            const on = discountMode === unit;
+                            return (
+                              <Pressable
+                                key={unit}
+                                onPress={() => setDiscountUnit(unit)}
+                                tabIndex={-1}
+                                className="flex-1 items-center py-0.5"
+                                style={{ backgroundColor: on ? accent : 'transparent' }}
+                              >
+                                <Text className="text-[11px] font-bold" style={{ color: on ? '#fff' : '#6B7280' }}>
+                                  {label}
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                        <Text className="text-right text-[13px] font-semibold text-gray-700" style={{ width: 70 }}>
+                          − {discountAmount.toLocaleString()}
+                        </Text>
+                      </View>
+                    </View>
+                    <View className="flex-row items-center justify-between py-1">
+                      <Text className="text-[13px] text-gray-500">VAT (%)</Text>
+                      <View className="flex-row items-center" style={{ gap: 8 }}>
+                        <View style={{ width: 84 }}>
+                          <KeyInput
+                            value={vatPercent}
+                            onChangeText={setVatPercent}
+                            inputRef={vatRef}
+                            onEnter={() => remarkRef.current?.focus()}
+                            onRequestSave={handleSave}
+                            accent={accent}
+                            numeric
+                            align="right"
+                            accessibilityLabel="VAT percent"
+                            className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-gray-900"
+                          />
+                        </View>
+                        <Pressable
+                          onPress={() => setVatPercent('13')}
+                          tabIndex={-1}
+                          className="items-center rounded-md border border-gray-300 bg-white px-1.5 py-0.5"
+                          style={{ width: 42 }}
+                          accessibilityLabel="Use standard 13 percent VAT"
+                        >
+                          <Text className="text-[11px] font-semibold text-gray-500">13%</Text>
+                        </Pressable>
+                        <Text className="text-right text-[13px] font-semibold text-gray-700" style={{ width: 70 }}>
+                          + {vatAmount.toLocaleString()}
+                        </Text>
+                      </View>
+                    </View>
+                    <View className="mt-2 flex-row items-center justify-between border-t border-gray-300 pt-2.5">
+                      <Text className="text-sm font-bold text-gray-900">G. Total</Text>
+                      <Text className="text-xl font-extrabold" style={{ color: accent }}>
+                        NPR {grandTotal.toLocaleString()}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              }
+            />
+
+            <View className="mt-4 flex-row flex-wrap items-center justify-end" style={{ gap: 16 }}>
+              <View className="flex-row" style={{ gap: 10 }}>
+                <Pressable onPress={onCancel} className="items-center rounded-xl border border-gray-300 bg-white px-6 py-2.5">
                   <Text className="text-sm font-semibold text-gray-600">Cancel</Text>
                 </Pressable>
                 <Pressable
+                  ref={saveButtonRef}
                   onPress={handleSave}
                   disabled={saving}
-                  className="flex-1 items-center rounded-xl py-3 disabled:opacity-50"
-                  style={{ backgroundColor: accent }}
+                  className="items-center rounded-xl px-8 py-2.5 disabled:opacity-50"
+                  style={{ backgroundColor: accent, boxShadow: `0 2px 6px ${accentShadow}` }}
                 >
                   <Text className="text-sm font-bold text-white">{saving ? 'Saving…' : 'Save'}</Text>
                 </Pressable>
@@ -1434,23 +1645,13 @@ function TransactionForm({
             </View>
           </View>
 
-          <View style={{ width: 320 }}>
+          <View style={{ width: 300 }}>
             <RecentEntriesCard userId={userId} type={type} color={accent} />
           </View>
         </View>
 
-        <ItemPickerModal
-          visible={showItemPicker}
-          products={products}
-          financeItems={financeItems ?? []}
-          onPick={handlePickProduct}
-          onPickFinanceItem={handlePickFinanceItem}
-          onPickCustom={handlePickCustomItem}
-          onClose={() => {
-            setShowItemPicker(false);
-            setEditingItemIndex(null);
-          }}
-        />
+        {confirmDialog}
+
         <ContactPickerModal
           visible={showPartyPicker}
           initialQuery={partyPickerQuery}
@@ -1795,6 +1996,7 @@ function TransactionForm({
         onRename={bankAccounts.rename}
         onDelete={bankAccounts.remove}
       />
+      {confirmDialog}
       <ContactPickerModal
         visible={showPartyPicker}
         initialQuery={partyPickerQuery}
@@ -2027,7 +2229,7 @@ export function TransactionDetailModal({
 // sorted under whichever day it was first *entered*, so an old bill's date
 // edited to a past day would still show up under "Today" if that's when it
 // was typed in.
-type FeedItem =
+export type FeedItem =
   | { kind: 'business'; id: string; date: string; tx: BusinessTransaction }
   | { kind: 'ledger'; id: string; date: string; entry: CustomerLedgerEntry; customerName: string | null }
   | { kind: 'vendor'; id: string; date: string; entry: VendorLedgerEntry; vendorName: string | null }
@@ -2247,6 +2449,9 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
   const isAddFlow = addParam === '1';
   const [filter, setFilter] = useState<'all' | BusinessTransactionType>(initialFilter);
   const [showForm, setShowForm] = useState(isAddFlow);
+  // Bumped after each save in the web quick-add flow so the form remounts
+  // empty (see onDone below) instead of closing to the history list.
+  const [formKey, setFormKey] = useState(0);
   const [editingTx, setEditingTx] = useState<BusinessTransaction | null>(null);
   const [viewingTx, setViewingTx] = useState<BusinessTransaction | null>(null);
   // The form renders inside the list's own header, so opening it while
@@ -2388,6 +2593,56 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
     ]);
   }
 
+  // Web: the list view is a Day Book style cash-book table (the entry form
+  // keeps its own layout below). Phones keep the card list.
+  if (Platform.OS === 'web' && !showForm) {
+    const typeForNew = filter === 'all' ? 'sale' : filter;
+    return (
+      <>
+        <TransactionsBook
+          feed={feed}
+          filters={FILTERS}
+          filter={filter}
+          onFilter={setFilter}
+          locked={isLockedToType}
+          title={isLockedToType ? `${TYPE_META[initialFilter].label}s` : 'Transactions'}
+          onBack={isLockedToType ? () => router.back() : undefined}
+          onNew={
+            isLockedToType
+              ? undefined
+              : () => {
+                  setEditingTx(null);
+                  setShowForm(true);
+                }
+          }
+          newLabel={`New ${TYPE_META[typeForNew].label.toLowerCase()}`}
+          basePath={basePath}
+          categoryNameById={categoryNameById}
+          bankAccountNameById={bankAccountNameById}
+          accountName={(id) => (id ? (bankAccountNameById.get(id) ?? 'Bank') : 'Cash')}
+          onOpenTx={setViewingTx}
+          onDeleteTx={handleDelete}
+          onDeleteTransfer={(transfer) =>
+            showAlert('Remove this transfer?', 'This undoes the move between your accounts.', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Remove', style: 'destructive', onPress: () => deleteTransfer.mutate(transfer.id) },
+            ])
+          }
+        />
+        <TransactionDetailModal
+          tx={viewingTx}
+          categoryName={viewingTx?.expense_category_id ? categoryNameById.get(viewingTx.expense_category_id) ?? null : null}
+          bankAccountName={viewingTx?.bank_account_id ? bankAccountNameById.get(viewingTx.bank_account_id) ?? null : null}
+          onClose={() => setViewingTx(null)}
+          onEdit={() => {
+            setViewingTx(null);
+            openForm(viewingTx);
+          }}
+        />
+      </>
+    );
+  }
+
   return (
     <View className="flex-1 bg-gray-50 px-6 pt-4">
       <KeyboardAwareSectionList
@@ -2454,14 +2709,24 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
 
             {showForm && userId && (
               <TransactionForm
+                key={formKey}
                 userId={userId}
                 initial={editingTx ?? undefined}
                 type={editingTx?.type ?? (filter === 'all' ? 'sale' : filter)}
                 existingNames={existingExpenseNames}
                 customers={customers ?? []}
                 products={products ?? []}
-                voicePrefill={editingTx ? null : voicePrefill}
+                voicePrefill={editingTx || formKey > 0 ? null : voicePrefill}
                 onDone={() => {
+                  // Entering several bills in a row is the whole point of
+                  // the web entry screen: stay on it with a blank form and a
+                  // quick confirmation, rather than dropping back to history.
+                  if (Platform.OS === 'web' && isQuickAddFlow) {
+                    showAlert(`${TYPE_META[initialFilter].label} saved`, 'The form is ready for the next entry.');
+                    setFormKey((k) => k + 1);
+                    setTimeout(() => listRef.current?.scrollToPosition(0, 0, true), 0);
+                    return;
+                  }
                   setShowForm(false);
                   setEditingTx(null);
                   if (isQuickAddFlow) router.back();

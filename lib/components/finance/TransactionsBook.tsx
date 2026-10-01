@@ -1,0 +1,391 @@
+// lib/components/finance/TransactionsBook.tsx
+import { useMemo } from 'react';
+import { Pressable, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useAuthStore } from '../../hooks/useAuth';
+import { toBsHistoryLabel } from '../../utils/nepaliDate';
+import { BookHeader, BookPage, BookStat, BookStats, BookTable, Pill, money, useBookLayout, type BookColumn } from './BookKit';
+import type { FeedItem } from './TransactionsScreen';
+import type { AccountTransfer, BusinessTransaction, BusinessTransactionType } from '../../../types/database.types';
+
+type FilterKey = 'all' | BusinessTransactionType;
+
+interface PillStyle {
+  label: string;
+  color: string;
+  bg: string;
+}
+
+const PILL = {
+  received: { label: 'Cash in', color: '#047857', bg: '#ECFDF5' },
+  paid: { label: 'Paid out', color: '#B91C1C', bg: '#FEF2F2' },
+  expense: { label: 'Expense', color: '#B91C1C', bg: '#FEF2F2' },
+  sale: { label: 'Sale bill', color: '#1D4ED8', bg: '#EFF6FF' },
+  purchase: { label: 'Purchase bill', color: '#6D28D9', bg: '#F5F3FF' },
+  creditSale: { label: 'Credit sale', color: '#1D4ED8', bg: '#EFF6FF' },
+  creditPurchase: { label: 'Credit purchase', color: '#6D28D9', bg: '#F5F3FF' },
+  transfer: { label: 'Transfer', color: '#4338CA', bg: '#EEF2FF' },
+} satisfies Record<string, PillStyle>;
+
+interface Row {
+  id: string;
+  group: string;
+  time: string;
+  details: string;
+  sub: string | null;
+  pill: PillStyle;
+  invoice: number | null;
+  discount: number | null;
+  amount: number | null;
+  cashIn: number | null;
+  cashOut: number | null;
+  onPress?: () => void;
+  onDelete?: () => void;
+}
+
+function localDate(date: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const [y, m, d] = date.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  return new Date(date);
+}
+
+function groupLabel(date: string): string {
+  const d = localDate(date);
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const diff = Math.round((today - day) / 86_400_000);
+  const rel = diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : diff > 1 ? `${diff} days ago` : '';
+  const bs = toBsHistoryLabel(date);
+  return rel ? `${rel} · ${bs}` : bs;
+}
+
+function timeOf(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** The Transactions list in the Day Book's cash-book layout: header card, stat
+ * tiles, and one bordered table of every entry (grouped by day) with totals. */
+export function TransactionsBook({
+  feed,
+  filters,
+  filter,
+  onFilter,
+  locked,
+  title,
+  onBack,
+  onNew,
+  newLabel,
+  basePath,
+  categoryNameById,
+  bankAccountNameById,
+  accountName,
+  onOpenTx,
+  onDeleteTx,
+  onDeleteTransfer,
+}: {
+  feed: FeedItem[];
+  filters: { key: FilterKey; label: string }[];
+  filter: FilterKey;
+  onFilter: (f: FilterKey) => void;
+  /** Arrived for one type (Sales/Purchase/Expense) - no filter tabs, no add button. */
+  locked: boolean;
+  title: string;
+  onBack?: () => void;
+  onNew?: () => void;
+  newLabel: string;
+  basePath?: string;
+  categoryNameById: Map<string, string>;
+  bankAccountNameById: Map<string, string>;
+  accountName: (id: string | null) => string;
+  onOpenTx: (tx: BusinessTransaction) => void;
+  onDeleteTx: (tx: BusinessTransaction) => void;
+  onDeleteTransfer: (transfer: AccountTransfer) => void;
+}) {
+  const layout = useBookLayout();
+  const businessName = useAuthStore((state) => state.profile?.business_name);
+
+  const rows = useMemo<Row[]>(() => {
+    const goParty = (id: string) => () => basePath && router.push(`${basePath}/customer/${id}` as never);
+    return feed.map((item): Row => {
+      const group = groupLabel(item.date);
+      if (item.kind === 'business') {
+        const t = item.tx;
+        const isExpense = t.type === 'expense';
+        const category = t.expense_category_id ? categoryNameById.get(t.expense_category_id) : null;
+        const via = t.bank_account_id ? (bankAccountNameById.get(t.bank_account_id) ?? 'Bank') : 'Cash';
+        const discount = t.discount_amount ?? 0;
+        return {
+          id: `b-${t.id}`,
+          group,
+          time: timeOf(t.created_at),
+          details: isExpense ? t.party_name || category || 'Expense' : t.party_name || (t.type === 'sale' ? 'Sale' : 'Purchase'),
+          sub:
+            [
+              t.bill_no ? `Bill #${t.bill_no}` : null,
+              isExpense && t.party_name ? category : null,
+              t.note,
+              isExpense ? via : t.payment_mode === 'credit' ? 'On credit' : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') || null,
+          pill: isExpense ? PILL.expense : t.type === 'sale' ? PILL.sale : PILL.purchase,
+          invoice: isExpense ? null : t.amount + discount - (t.vat_amount ?? 0),
+          discount: isExpense ? null : discount,
+          amount: isExpense ? null : t.amount,
+          cashIn: null,
+          cashOut: isExpense ? t.amount : null,
+          onPress: () => onOpenTx(t),
+          onDelete: () => onDeleteTx(t),
+        };
+      }
+      if (item.kind === 'ledger') {
+        const e = item.entry;
+        const isIn = e.entry_type === 'credit';
+        const manual = e.source === 'manual';
+        const name = item.customerName ?? 'Unknown customer';
+        return {
+          id: `l-${e.id}`,
+          group,
+          time: timeOf(e.created_at),
+          details: isIn ? `Received from ${name}` : manual ? `Paid to ${name}` : `${name} owes`,
+          sub: [e.receipt_no ? `Receipt #${e.receipt_no}` : null, e.note ?? (manual ? null : 'From a booked job')].filter(Boolean).join(' · ') || null,
+          pill: isIn ? PILL.received : manual ? PILL.paid : PILL.creditSale,
+          invoice: null,
+          discount: null,
+          amount: !isIn && !manual ? e.amount : null,
+          cashIn: isIn ? e.amount : null,
+          cashOut: !isIn && manual ? e.amount : null,
+          onPress: goParty(e.customer_id),
+        };
+      }
+      if (item.kind === 'vendor') {
+        const e = item.entry;
+        const isPayment = e.entry_type === 'credit';
+        const name = item.vendorName ?? 'Unknown vendor';
+        return {
+          id: `v-${e.id}`,
+          group,
+          time: timeOf(e.created_at),
+          details: isPayment ? `Paid to ${name}` : `Bought on credit · ${name}`,
+          sub: [e.receipt_no ? `Receipt #${e.receipt_no}` : null, e.note ?? (e.source === 'booking' ? 'From a credit purchase' : null)].filter(Boolean).join(' · ') || null,
+          pill: isPayment ? PILL.paid : PILL.creditPurchase,
+          invoice: null,
+          discount: null,
+          amount: isPayment ? null : e.amount,
+          cashIn: null,
+          cashOut: isPayment ? e.amount : null,
+          onPress: goParty(e.vendor_id),
+        };
+      }
+      const tr = item.transfer;
+      return {
+        id: `t-${tr.id}`,
+        group,
+        time: timeOf(tr.created_at),
+        details: `${accountName(tr.from_account_id)} → ${accountName(tr.to_account_id)}`,
+        sub: tr.note ?? 'Between your own accounts',
+        pill: PILL.transfer,
+        invoice: null,
+        discount: null,
+        amount: tr.amount,
+        cashIn: null,
+        cashOut: null,
+        onDelete: () => onDeleteTransfer(tr),
+      };
+    });
+  }, [feed, basePath, categoryNameById, bankAccountNameById, accountName, onOpenTx, onDeleteTx, onDeleteTransfer]);
+
+  const stats = useMemo(() => {
+    const sums = { sale: 0, purchase: 0, expense: 0 };
+    const counts = { sale: 0, purchase: 0, expense: 0 };
+    let largest = 0;
+    for (const item of feed) {
+      if (item.kind !== 'business') continue;
+      sums[item.tx.type] += item.tx.amount;
+      counts[item.tx.type] += 1;
+      largest = Math.max(largest, item.tx.amount);
+    }
+    return { sums, counts, largest };
+  }, [feed]);
+
+  const totals = useMemo(
+    () => ({
+      amount: rows.reduce((s, r) => s + (r.amount ?? 0), 0),
+      cashIn: rows.reduce((s, r) => s + (r.cashIn ?? 0), 0),
+      cashOut: rows.reduce((s, r) => s + (r.cashOut ?? 0), 0),
+    }),
+    [rows]
+  );
+
+  const num = (value: number | null, color: string, bold = false) =>
+    value == null ? (
+      <Text className="text-[12.5px] text-gray-400">—</Text>
+    ) : (
+      <Text className={`text-[12.5px] ${bold ? 'font-bold' : 'font-medium'}`} style={{ color }}>
+        {money(value)}
+      </Text>
+    );
+
+  const trash = (row: Row) =>
+    row.onDelete ? (
+      <Pressable onPress={row.onDelete} hitSlop={6} accessibilityLabel="Delete entry" className="opacity-50">
+        <Ionicons name="trash-outline" size={15} color="#6B7280" />
+      </Pressable>
+    ) : null;
+
+  const detailsCell = (row: Row, withPill: boolean) => (
+    <View style={{ minWidth: 0, gap: 2 }}>
+      <Text className="text-[13px] font-medium text-gray-900" numberOfLines={1}>
+        {row.details}
+      </Text>
+      {withPill && <Pill text={row.pill.label} color={row.pill.color} bg={row.pill.bg} />}
+      {!!row.sub && (
+        <Text className="text-[11px] text-gray-400" numberOfLines={1}>
+          {row.sub}
+        </Text>
+      )}
+    </View>
+  );
+
+  const columns: BookColumn<Row>[] = layout.full
+    ? [
+        { key: 'time', label: 'Time', width: 58, render: (r) => <Text className="text-[12.5px] text-gray-500">{r.time}</Text> },
+        { key: 'details', label: 'Transaction details', render: (r) => detailsCell(r, false) },
+        { key: 'type', label: 'Type', width: 116, render: (r) => <Pill text={r.pill.label} color={r.pill.color} bg={r.pill.bg} /> },
+        { key: 'invoice', label: 'Invoice', width: 84, align: 'right', render: (r) => num(r.invoice, '#4B5563') },
+        { key: 'discount', label: 'Discount', width: 76, align: 'right', render: (r) => num(r.discount, '#4B5563') },
+        { key: 'amount', label: 'Bill amount', width: 100, align: 'right', render: (r) => num(r.amount, r.pill.color) },
+        { key: 'cashIn', label: 'Cash in', width: 96, align: 'right', render: (r) => num(r.cashIn, '#047857', true) },
+        { key: 'cashOut', label: 'Cash out', width: 96, align: 'right', render: (r) => num(r.cashOut, '#B91C1C', true) },
+        { key: 'act', label: '', width: 40, align: 'right', render: trash },
+      ]
+    : [
+        { key: 'time', label: 'Time', width: 50, render: (r) => <Text className="text-[11.5px] text-gray-500">{r.time}</Text> },
+        { key: 'details', label: 'Transaction details', render: (r) => detailsCell(r, true) },
+        {
+          key: 'amount',
+          label: 'Amount',
+          width: 92,
+          align: 'right',
+          render: (r) => {
+            const signed = r.cashIn != null ? `+${money(r.cashIn)}` : r.cashOut != null ? `−${money(r.cashOut)}` : money(r.amount);
+            const color = r.cashIn != null ? '#047857' : r.cashOut != null ? '#B91C1C' : r.pill.color;
+            return (
+              <Text className="text-[12.5px] font-bold" style={{ color }}>
+                {signed}
+              </Text>
+            );
+          },
+        },
+        { key: 'act', label: '', width: 34, align: 'right', render: trash },
+      ];
+
+  const footerLabel = `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} · Totals`;
+  const footerCells = layout.full
+    ? {
+        amount: <Text className="text-[13px] font-extrabold text-gray-900">{money(totals.amount)}</Text>,
+        cashIn: <Text className="text-[13px] font-extrabold" style={{ color: '#047857' }}>{money(totals.cashIn)}</Text>,
+        cashOut: <Text className="text-[13px] font-extrabold" style={{ color: '#B91C1C' }}>{money(totals.cashOut)}</Text>,
+      }
+    : { amount: <Text className="text-[13px] font-extrabold text-gray-900">{money(totals.amount + totals.cashIn - totals.cashOut)}</Text> };
+
+  const lockedType = locked && filter !== 'all' ? filter : null;
+  const lockedTotal = lockedType ? stats.sums[lockedType] : 0;
+  const lockedCount = lockedType ? stats.counts[lockedType] : 0;
+
+  return (
+    <BookPage wide={layout.wide}>
+      <BookHeader
+        wide={layout.wide}
+        eyebrow={businessName}
+        title={title}
+        subtitle={locked ? `Every ${title.toLowerCase()} entry, newest first` : 'Sales, purchases, expenses and payments, newest first'}
+        left={
+          onBack ? (
+            <Pressable
+              onPress={onBack}
+              accessibilityLabel="Back"
+              className="h-10 w-10 items-center justify-center rounded-lg border border-gray-200"
+            >
+              <Ionicons name="chevron-back" size={18} color="#374151" />
+            </Pressable>
+          ) : undefined
+        }
+        right={
+          <>
+            {!locked && (
+              <View className="flex-row rounded-lg bg-gray-100 p-1" style={{ gap: 2 }}>
+                {filters.map((f) => {
+                  const on = f.key === filter;
+                  return (
+                    <Pressable
+                      key={f.key}
+                      onPress={() => onFilter(f.key)}
+                      className="rounded-md px-3 py-1.5"
+                      style={on ? { backgroundColor: '#fff' } : undefined}
+                    >
+                      <Text className={`text-xs font-bold ${on ? 'text-blue-700' : 'text-gray-500'}`}>{f.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+            {onNew && (
+              <Pressable
+                onPress={onNew}
+                className="h-10 flex-row items-center justify-center rounded-lg px-3.5"
+                style={{ backgroundColor: '#1D4ED8', gap: 6 }}
+              >
+                <Ionicons name="add" size={17} color="#FFFFFF" />
+                <Text className="text-sm font-semibold text-white">{newLabel}</Text>
+              </Pressable>
+            )}
+          </>
+        }
+      />
+
+      <BookStats>
+        {lockedType ? (
+          <>
+            <BookStat label="Total" value={`NPR ${money(lockedTotal)}`} color="#1D4ED8" />
+            <BookStat label="Entries" value={String(lockedCount)} color="#374151" />
+            <BookStat label="Average" value={`NPR ${money(lockedCount ? lockedTotal / lockedCount : 0)}`} color="#374151" />
+            <BookStat label="Largest" value={`NPR ${money(stats.largest)}`} color="#374151" />
+          </>
+        ) : (
+          <>
+            <BookStat label="Sales" value={`NPR ${money(stats.sums.sale)}`} color="#1D4ED8" />
+            <BookStat label="Purchases" value={`NPR ${money(stats.sums.purchase)}`} color="#6D28D9" />
+            <BookStat label="Expenses" value={`NPR ${money(stats.sums.expense)}`} color="#B91C1C" />
+            <BookStat label="Entries" value={String(rows.length)} color="#374151" />
+          </>
+        )}
+      </BookStats>
+
+      {rows.length === 0 ? (
+        <View className="items-center rounded-xl border border-gray-300 bg-white py-10">
+          <Ionicons name="cash-outline" size={28} color="#D1D5DB" />
+          <Text className="mt-2 text-gray-500">No transactions yet.</Text>
+        </View>
+      ) : (
+        <BookTable
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          onRowPress={(r) => r.onPress?.()}
+          groupOf={(r) => r.group}
+          footer={{ label: footerLabel, cells: footerCells }}
+        />
+      )}
+
+      <Text className="px-1 text-[11.5px] leading-[17px] text-gray-400">
+        Tap an entry to open it. Sale and purchase bills show what was billed - they don't change the balance until the money is received or paid, which appears as its own Cash in or Paid out row.
+      </Text>
+    </BookPage>
+  );
+}
