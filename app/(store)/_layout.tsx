@@ -13,7 +13,7 @@ import { shortcuts as financeShortcuts } from '../../lib/components/finance/Fina
 const NAV_ITEMS: WebNavItem[] = [
   {
     href: '/(store)/finance',
-    label: 'Finance',
+    label: 'Dashboard',
     icon: 'wallet',
     children: financeShortcuts('/(store)').map((s) => ({ href: s.href, label: s.label, icon: s.icon })),
   },
@@ -58,7 +58,7 @@ export default function StoreLayout() {
     >
       <Tabs.Screen
         name="finance"
-        options={{ title: 'Finance', tabBarIcon: ({ color, focused }) => <TabIcon name="wallet" color={color} focused={focused} /> }}
+        options={{ title: 'Dashboard', tabBarIcon: ({ color, focused }) => <TabIcon name="wallet" color={color} focused={focused} /> }}
       />
       <Tabs.Screen
         name="inventory"
