@@ -1,15 +1,15 @@
 // lib/components/finance/dashboard/dashboardData.ts
-import { toBsDayChartLabel, adStringToBs, bsToAdString, BS_MONTHS } from '../../../utils/nepaliDate';
-import { localTodayIso } from '../../../utils/localDate';
+import { toBsDayChartLabel } from '../../../utils/nepaliDate';
 import type { BusinessTransaction, BusinessTransactionType } from '../../../../types/database.types';
 
-export type PeriodKey = '7d' | '30d' | '6m' | '12m';
+export type PeriodKey = '1d' | '1w' | '1m';
 
-export const PERIODS: { key: PeriodKey; label: string; long: string }[] = [
-  { key: '7d', label: '7 days', long: 'previous 7 days' },
-  { key: '30d', label: '30 days', long: 'previous 30 days' },
-  { key: '6m', label: '6 months', long: 'previous 6 months' },
-  { key: '12m', label: '12 months', long: 'previous 12 months' },
+/** The three views of the Sales trend: today by the hour, the last 7 days, and
+ * the last 30 days. `caption` finishes the sentence "NPR 12,000 ...". */
+export const PERIODS: { key: PeriodKey; label: string; caption: string }[] = [
+  { key: '1d', label: '1 day', caption: 'today' },
+  { key: '1w', label: '1 week', caption: 'in the last 7 days' },
+  { key: '1m', label: '1 month', caption: 'in the last 30 days' },
 ];
 
 export interface Bucket {
@@ -20,6 +20,8 @@ export interface Bucket {
 
 export interface DashboardRange {
   buckets: Bucket[];
+  /** How many buckets have happened yet - every one, except for today by the hour. */
+  upTo: number;
   from: number;
   to: number;
   prevFrom: number;
@@ -41,6 +43,33 @@ export function txTime(t: Pick<BusinessTransaction, 'bill_date' | 'created_at'>)
   return dayTime(t.bill_date ?? t.created_at);
 }
 
+/** When a transaction happened. A bill carries its bill date, which is a day
+ * with no hour - so for the hourly view use the time it was entered, when that
+ * was the same day. A backdated bill has no real hour and stays at midnight. */
+export function txMoment(t: Pick<BusinessTransaction, 'bill_date' | 'created_at'>): number {
+  const day = txTime(t);
+  if (!t.bill_date) return day;
+  const created = new Date(t.created_at);
+  const createdDay = new Date(created.getFullYear(), created.getMonth(), created.getDate()).getTime();
+  return createdDay === day ? created.getTime() : day;
+}
+
+function hourLabel(h: number): string {
+  return h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`;
+}
+
+/** The 24 hours of a day (`daysAgo` 0 = today). */
+function hourBuckets(daysAgo: number): Bucket[] {
+  const now = new Date();
+  const out: Bucket[] = [];
+  for (let h = 0; h < 24; h++) {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo, h);
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo, h + 1);
+    out.push({ start: start.getTime(), end: end.getTime(), label: hourLabel(h) });
+  }
+  return out;
+}
+
 function dayBuckets(n: number, endOffsetDays: number): Bucket[] {
   const now = new Date();
   const out: Bucket[] = [];
@@ -52,38 +81,25 @@ function dayBuckets(n: number, endOffsetDays: number): Bucket[] {
   return out;
 }
 
-// Months are Bikram Sambat months - the calendar the business actually runs
-// on - so "last 6 months" lines up with Baisakh, Jestha... not AD month edges.
-function bsMonthStart(idx: number): Date {
-  const y = Math.floor(idx / 12);
-  const m = idx % 12;
-  const [yy, mm, dd] = bsToAdString(y, m, 1).split('-').map(Number);
-  return new Date(yy, mm - 1, dd);
-}
-
-function monthBuckets(n: number, endOffsetMonths: number): Bucket[] {
-  const bs = adStringToBs(localTodayIso());
-  if (!bs) return dayBuckets(30, endOffsetMonths * 30);
-  const nowIdx = bs.year * 12 + bs.month;
-  const out: Bucket[] = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const idx = nowIdx - endOffsetMonths - i;
-    out.push({
-      start: bsMonthStart(idx).getTime(),
-      end: bsMonthStart(idx + 1).getTime(),
-      label: BS_MONTHS[((idx % 12) + 12) % 12],
-    });
-  }
-  return out;
-}
-
 export function buildRange(period: PeriodKey): DashboardRange {
-  const count = period === '7d' ? 7 : period === '30d' ? 30 : period === '6m' ? 6 : 12;
-  const daily = period === '7d' || period === '30d';
-  const buckets = daily ? dayBuckets(count, 0) : monthBuckets(count, 0);
-  const prev = daily ? dayBuckets(count, count) : monthBuckets(count, count);
+  if (period === '1d') {
+    const buckets = hourBuckets(0);
+    const prev = hourBuckets(1);
+    return {
+      buckets,
+      upTo: new Date().getHours() + 1,
+      from: buckets[0].start,
+      to: buckets[buckets.length - 1].end,
+      prevFrom: prev[0].start,
+      prevTo: prev[prev.length - 1].end,
+    };
+  }
+  const count = period === '1w' ? 7 : 30;
+  const buckets = dayBuckets(count, 0);
+  const prev = dayBuckets(count, count);
   return {
     buckets,
+    upTo: buckets.length,
     from: buckets[0].start,
     to: buckets[buckets.length - 1].end,
     prevFrom: prev[0].start,
@@ -105,7 +121,7 @@ export function seriesByBucket(txs: BusinessTransaction[], type: BusinessTransac
   const values = buckets.map(() => 0);
   for (const t of txs) {
     if (t.type !== type) continue;
-    const time = txTime(t);
+    const time = txMoment(t);
     const i = buckets.findIndex((b) => time >= b.start && time < b.end);
     if (i >= 0) values[i] += t.amount;
   }

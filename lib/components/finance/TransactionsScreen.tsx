@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore, useRole } from '../../hooks/useAuth';
 import { useSupabaseInsert, useSupabaseQuery, useSupabaseUpdate, useSupabaseUpsert, useSupabaseDelete } from '../../hooks/useSupabase';
 import { useBankAccounts } from '../../hooks/useBankAccounts';
+import { useScreenHeader } from '../../hooks/useScreenHeader';
 import { usePhoneContacts } from '../../hooks/usePhoneContacts';
 import { useScanBill } from '../../hooks/useScanBill';
 import { DateField } from '../DateTimeFields';
@@ -322,7 +323,7 @@ function ItemPickerModal({
 
 const TYPE_META: Record<BusinessTransactionType, { label: string; color: string; bg: string; icon: keyof typeof Ionicons.glyphMap }> = {
   sale: { label: 'Sale', color: '#059669', bg: 'bg-emerald-50', icon: 'trending-up' },
-  purchase: { label: 'Purchase', color: '#2563eb', bg: 'bg-blue-50', icon: 'cart' },
+  purchase: { label: 'Purchase', color: '#dc2626', bg: 'bg-red-50', icon: 'cart' },
   expense: { label: 'Expense', color: '#dc2626', bg: 'bg-red-50', icon: 'receipt' },
 };
 
@@ -795,7 +796,7 @@ function TransactionForm({
           ...(discountAmount > 0 ? [{ label: 'Discount', value: `− NPR ${discountAmount.toLocaleString()}` }] : []),
           ...(vatAmount > 0 ? [{ label: 'VAT', value: `+ NPR ${vatAmount.toLocaleString()}` }] : []),
         ],
-        total: { label: 'Grand total', value: `NPR ${grandTotal.toLocaleString()}` },
+        total: { label: 'Grand total', value: `NPR ${grandTotal.toLocaleString()}`, color: TYPE_META[type].color },
       });
       if (!ok) return;
       setSaving(true);
@@ -879,7 +880,7 @@ function TransactionForm({
         ...(selectedCategory ? [{ label: 'Category', value: selectedCategory.name }] : []),
         { label: 'Paid via', value: selectedAccountName },
       ],
-      total: { label: 'Amount', value: `NPR ${value.toLocaleString()}` },
+      total: { label: 'Amount', value: `NPR ${value.toLocaleString()}`, color: TYPE_META.expense.color },
     });
     if (!ok) return;
     setSaving(true);
@@ -1087,7 +1088,7 @@ function TransactionForm({
         ...(validRows.length > 5 ? [{ label: `+ ${validRows.length - 5} more` }] : []),
         { label: 'Paid via', value: selectedAccountName },
       ],
-      total: { label: 'Total', value: `NPR ${sum.toLocaleString()}` },
+      total: { label: 'Total', value: `NPR ${sum.toLocaleString()}`, color: TYPE_META.expense.color },
     });
     if (!ok) return;
     setSaving(true);
@@ -1159,25 +1160,37 @@ function TransactionForm({
     }
   }, [items, isBill]);
 
+  // On web the form's name and its Scan Bill button live in the top bar; the
+  // heading row that used to repeat the name under it is gone.
+  const newExpenses = type === 'expense' && !initial;
+  const scanRef = useRef<() => void>(() => {});
+  scanRef.current = newExpenses ? handleScanForExpenseRow : handleScan;
+  useScreenHeader(
+    Platform.OS === 'web'
+      ? {
+          title: newExpenses ? 'New Expenses' : `${initial ? 'Edit' : 'New'} ${TYPE_META[type].label}`,
+          resetTitle: 'Statement',
+          headerRight: () => (
+            <Pressable
+              onPress={() => scanRef.current()}
+              disabled={scanning}
+              className="h-9 flex-row items-center justify-center rounded-lg border border-blue-600 bg-blue-50 px-3.5 disabled:opacity-50"
+              style={{ gap: 6 }}
+            >
+              <Ionicons name={scanning ? 'hourglass-outline' : 'camera-outline'} size={15} color="#2563EB" />
+              <Text className="text-[13px] font-semibold text-blue-700">{scanning ? 'Reading…' : 'Scan Bill'}</Text>
+            </Pressable>
+          ),
+        }
+      : {},
+    [type, initial?.id, scanning]
+  );
+
   if (Platform.OS === 'web' && type === 'expense' && !initial) {
     return (
       <View className="mb-4">
         <View className="mb-4 flex-row" style={{ gap: 24 }}>
           <View className="flex-1" style={{ minWidth: 0, maxWidth: 1500 }}>
-            <View className="mb-5 flex-row items-center justify-between">
-              <Text className="text-lg font-bold" style={{ color: FINANCE_ENTRY_ACCENT }}>
-                New Expenses
-              </Text>
-              <Pressable
-                onPress={handleScanForExpenseRow}
-                disabled={scanning}
-                className="flex-row items-center justify-center gap-2 rounded-lg border border-blue-600 bg-blue-50 px-4 py-2.5 disabled:opacity-50"
-              >
-                <Ionicons name={scanning ? 'hourglass-outline' : 'camera-outline'} size={16} color="#2563EB" />
-                <Text className="text-sm font-semibold text-blue-700">{scanning ? 'Reading the slip…' : 'Scan Bill'}</Text>
-              </Pressable>
-            </View>
-
             <View className="mb-5 rounded-2xl border border-gray-200 bg-white p-5">
               <FormSection icon="calendar-outline" title="Details" first>
                 <Text className="mb-1 text-xs font-medium text-gray-500">Date</Text>
@@ -1340,20 +1353,6 @@ function TransactionForm({
       <View className="mb-4">
         <View className="mb-4 flex-row" style={{ gap: 24 }}>
           <View className="flex-1" style={{ minWidth: 0, maxWidth: 1500 }}>
-            <View className="mb-4 flex-row items-center justify-between">
-              <Text className="text-lg font-bold" style={{ color: accent }}>
-                {initial ? `Edit ${TYPE_META[type].label}` : `New ${TYPE_META[type].label}`}
-              </Text>
-              <Pressable
-                onPress={handleScan}
-                disabled={scanning}
-                className="flex-row items-center justify-center gap-2 rounded-lg border border-blue-600 bg-blue-50 px-4 py-2.5 disabled:opacity-50"
-              >
-                <Ionicons name={scanning ? 'hourglass-outline' : 'camera-outline'} size={16} color="#2563EB" />
-                <Text className="text-sm font-semibold text-blue-700">{scanning ? 'Reading the bill…' : 'Scan Bill'}</Text>
-              </Pressable>
-            </View>
-
             {/* Vendor, bill number and date share one row - everything that
                 identifies the bill - and the whole form is keyboard-driven:
                 Tab/Enter walk Vendor -> Bill No. -> Date -> Items -> Discount
@@ -1618,7 +1617,7 @@ function TransactionForm({
                     </View>
                     <View className="mt-2 flex-row items-center justify-between border-t border-gray-300 pt-2.5">
                       <Text className="text-sm font-bold text-gray-900">G. Total</Text>
-                      <Text className="text-xl font-extrabold" style={{ color: accent }}>
+                      <Text className="text-xl font-extrabold" style={{ color: TYPE_META[type].color }}>
                         NPR {grandTotal.toLocaleString()}
                       </Text>
                     </View>
@@ -1646,7 +1645,7 @@ function TransactionForm({
           </View>
 
           <View style={{ width: 300 }}>
-            <RecentEntriesCard userId={userId} type={type} color={accent} />
+            <RecentEntriesCard userId={userId} type={type} color={TYPE_META[type].color} />
           </View>
         </View>
 
@@ -2251,13 +2250,15 @@ function dayLabel(dateStr: string): string {
 
 function LedgerRow({ item, customerName, basePath }: { item: CustomerLedgerEntry; customerName: string | null; basePath?: string }) {
   const isDebit = item.entry_type === 'debit';
+  // Money we gave the customer is red; money they paid, or still owe us, is green.
+  const isOut = isDebit && item.source === 'manual';
   return (
     <Pressable
       onPress={() => basePath && router.push(`${basePath}/customer/${item.customer_id}` as any)}
       className="mb-2.5 flex-row items-center gap-3 rounded-2xl border border-gray-200 bg-white p-4"
     >
-      <View className={`h-9 w-9 items-center justify-center rounded-full ${isDebit ? 'bg-red-50' : 'bg-emerald-50'}`}>
-        <Ionicons name={isDebit ? 'arrow-up' : 'arrow-down'} size={16} color={isDebit ? '#DC2626' : '#059669'} />
+      <View className={`h-9 w-9 items-center justify-center rounded-full ${isOut ? 'bg-red-50' : 'bg-emerald-50'}`}>
+        <Ionicons name={isDebit ? 'arrow-up' : 'arrow-down'} size={16} color={isOut ? '#DC2626' : '#059669'} />
       </View>
       <View className="flex-1">
         <Text className="text-sm font-semibold text-gray-900" numberOfLines={1}>
@@ -2268,7 +2269,7 @@ function LedgerRow({ item, customerName, basePath }: { item: CustomerLedgerEntry
           {toBsHistoryLabel(item.entry_date ?? item.created_at)}
         </Text>
       </View>
-      <Text className="text-sm font-extrabold" style={{ color: isDebit ? '#DC2626' : '#059669' }}>
+      <Text className="text-sm font-extrabold" style={{ color: isOut ? '#DC2626' : '#059669' }}>
         NPR {item.amount.toLocaleString()}
       </Text>
     </Pressable>
@@ -2282,8 +2283,8 @@ function VendorFeedRow({ item, vendorName, basePath }: { item: VendorLedgerEntry
       onPress={() => basePath && router.push(`${basePath}/customer/${item.vendor_id}` as any)}
       className="mb-2.5 flex-row items-center gap-3 rounded-2xl border border-orange-100 bg-white p-4"
     >
-      <View className={`h-9 w-9 items-center justify-center rounded-full ${isDebit ? 'bg-red-50' : 'bg-emerald-50'}`}>
-        <Ionicons name={isDebit ? 'cart-outline' : 'arrow-down'} size={16} color={isDebit ? '#DC2626' : '#059669'} />
+      <View className={`h-9 w-9 items-center justify-center rounded-full bg-red-50`}>
+        <Ionicons name={isDebit ? 'cart-outline' : 'arrow-down'} size={16} color="#DC2626" />
       </View>
       <View className="flex-1">
         <Text className="text-sm font-semibold text-gray-900" numberOfLines={1}>
@@ -2294,7 +2295,7 @@ function VendorFeedRow({ item, vendorName, basePath }: { item: VendorLedgerEntry
           {toBsHistoryLabel(item.entry_date ?? item.created_at)}
         </Text>
       </View>
-      <Text className="text-sm font-extrabold" style={{ color: isDebit ? '#DC2626' : '#059669' }}>
+      <Text className="text-sm font-extrabold" style={{ color: '#DC2626' }}>
         NPR {item.amount.toLocaleString()}
       </Text>
     </Pressable>
@@ -2596,7 +2597,6 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
   // Web: the list view is a Day Book style cash-book table (the entry form
   // keeps its own layout below). Phones keep the card list.
   if (Platform.OS === 'web' && !showForm) {
-    const typeForNew = filter === 'all' ? 'sale' : filter;
     return (
       <>
         <TransactionsBook
@@ -2605,17 +2605,8 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
           filter={filter}
           onFilter={setFilter}
           locked={isLockedToType}
-          title={isLockedToType ? `${TYPE_META[initialFilter].label}s` : 'Transactions'}
+          title={isLockedToType ? `${TYPE_META[initialFilter].label}s` : 'Statement'}
           onBack={isLockedToType ? () => router.back() : undefined}
-          onNew={
-            isLockedToType
-              ? undefined
-              : () => {
-                  setEditingTx(null);
-                  setShowForm(true);
-                }
-          }
-          newLabel={`New ${TYPE_META[typeForNew].label.toLowerCase()}`}
           basePath={basePath}
           categoryNameById={categoryNameById}
           bankAccountNameById={bankAccountNameById}
@@ -2653,6 +2644,8 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
         keyExtractor={(item) => `${item.kind}-${item.id}`}
         ListHeaderComponent={
           <>
+            {/* On web the top bar already carries the name. */}
+            {Platform.OS !== 'web' && (
             <View className="mb-3 flex-row items-center justify-between">
               {isLockedToType ? (
                 <View className="flex-row items-center gap-2">
@@ -2702,6 +2695,7 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
                 </Pressable>
               )}
             </View>
+            )}
 
             {!(showForm && isQuickAddFlow) && (
               <TrendChartCard key={filter} transactions={transactions ?? []} metrics={[filter]} />

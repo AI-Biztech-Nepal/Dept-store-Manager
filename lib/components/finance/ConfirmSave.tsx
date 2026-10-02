@@ -7,7 +7,8 @@ export interface ConfirmSaveOptions {
   title: string;
   /** A short summary of what is about to be saved (kept to a handful of lines). */
   rows?: { label: string; value?: string }[];
-  total?: { label: string; value: string };
+  /** `color` tints the figure - green for money in, red for money out (see moneyColors). */
+  total?: { label: string; value: string; color?: string };
   confirmLabel?: string;
 }
 
@@ -98,7 +99,7 @@ export function ConfirmSaveCard({
       {options.total && (
         <View className="mt-3 flex-row items-baseline justify-between px-1">
           <Text className="text-sm font-bold text-gray-900">{options.total.label}</Text>
-          <Text className="text-xl font-extrabold" style={{ color: FINANCE_ENTRY_ACCENT }}>
+          <Text className="text-xl font-extrabold" style={{ color: options.total.color ?? FINANCE_ENTRY_ACCENT }}>
             {options.total.value}
           </Text>
         </View>

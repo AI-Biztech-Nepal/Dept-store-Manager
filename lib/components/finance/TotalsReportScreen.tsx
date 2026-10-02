@@ -8,6 +8,7 @@ import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { isSettledOnTheSpot } from '../../hooks/useAccountBalances';
 import { BS_MONTHS, adStringToBs, toBsDayChartLabel, toBsMonthChartLabel } from '../../utils/nepaliDate';
 import { BarChart } from '../BarChart';
+import { MONEY } from './moneyColors';
 import { BackButton, BookPage, BookStat, BookStats, BookTable, FilterTabs, Pill, money, useBookLayout, useBookToolbar, type BookColumn } from './BookKit';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -24,13 +25,13 @@ interface PillStyle {
 }
 
 const PILL = {
-  sale: { label: 'Sale', color: '#1D4ED8', bg: '#EFF6FF' },
-  purchase: { label: 'Purchase', color: '#6D28D9', bg: '#F5F3FF' },
-  expense: { label: 'Expense', color: '#B91C1C', bg: '#FEF2F2' },
-  paymentReceived: { label: 'Payment received', color: '#047857', bg: '#ECFDF5' },
-  jobPayment: { label: 'Job payment', color: '#0F766E', bg: '#F0FDFA' },
-  paymentOut: { label: 'Payment out', color: '#B45309', bg: '#FFFBEB' },
-  paidVendor: { label: 'Paid vendor', color: '#6D28D9', bg: '#F5F3FF' },
+  sale: { label: 'Sale', color: MONEY.in.text, bg: MONEY.in.bg },
+  purchase: { label: 'Purchase', color: MONEY.out.text, bg: MONEY.out.bg },
+  expense: { label: 'Expense', color: MONEY.out.text, bg: MONEY.out.bg },
+  paymentReceived: { label: 'Payment received', color: MONEY.in.text, bg: MONEY.in.bg },
+  jobPayment: { label: 'Job payment', color: MONEY.in.text, bg: MONEY.in.bg },
+  paymentOut: { label: 'Payment out', color: MONEY.out.text, bg: MONEY.out.bg },
+  paidVendor: { label: 'Paid vendor', color: MONEY.out.text, bg: MONEY.out.bg },
 } satisfies Record<string, PillStyle>;
 
 interface Entry {

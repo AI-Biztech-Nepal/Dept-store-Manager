@@ -7,11 +7,12 @@ import { useAuthStore } from '../../../hooks/useAuth';
 import { useSupabaseQuery } from '../../../hooks/useSupabase';
 import { toBsHistoryLabel } from '../../../utils/nepaliDate';
 import { LineChart } from './LineChart';
+import { MONEY } from '../moneyColors';
 import { PERIODS, buildRange, npr, seriesByBucket, sumType, txTime, type PeriodKey } from './dashboardData';
 
-const SALES = '#2563EB';
-const PURCHASE = '#7C3AED';
-const EXPENSE = '#F59E0B';
+const SALES = MONEY.in.base;
+const PURCHASE = MONEY.out.base;
+const EXPENSE = MONEY.out.base;
 
 export const CARD_SHADOW = {
   shadowColor: '#101828',
@@ -69,18 +70,19 @@ function useTransactions() {
 /** Sales over time as a line, with a 7 days / 30 days / 6 months / 12 months switch. */
 export function SalesTrendCard() {
   const txs = useTransactions();
-  const [period, setPeriod] = useState<PeriodKey>('30d');
+  const [period, setPeriod] = useState<PeriodKey>('1m');
 
   const range = useMemo(() => buildRange(period), [period]);
   const labels = useMemo(() => range.buckets.map((b) => b.label), [range]);
   const periodMeta = PERIODS.find((p) => p.key === period)!;
-  const sales = useMemo(() => seriesByBucket(txs, 'sale', range.buckets), [txs, range]);
+  // Today by the hour stops at the current hour rather than running down to zero.
+  const sales = useMemo(() => seriesByBucket(txs, 'sale', range.buckets).slice(0, range.upTo), [txs, range]);
   const salesTotal = useMemo(() => sumType(txs, 'sale', range.from, range.to), [txs, range]);
 
   return (
     <Card
       title="Sales trend"
-      subtitle={`${npr(salesTotal)} in the last ${periodMeta.label}`}
+      subtitle={`${npr(salesTotal)} ${periodMeta.caption}`}
       right={
         <View className="flex-row rounded-xl bg-gray-100 p-1" style={{ gap: 2 }}>
           {PERIODS.map((p) => {

@@ -1,10 +1,12 @@
 // lib/components/finance/TransactionsBook.tsx
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { toBsHistoryLabel } from '../../utils/nepaliDate';
-import { BackButton, BookPage, BookStat, BookStats, BookTable, FilterTabs, Pill, ToolbarButton, money, useBookLayout, useBookToolbar, type BookColumn } from './BookKit';
+import { BackButton, BookPage, BookStat, BookStats, BookTable, FilterTabs, Pill, money, useBookLayout, useBookToolbar, type BookColumn } from './BookKit';
+import { DateFilterButton } from './DateRangeFilter';
+import { MONEY } from './moneyColors';
 import type { FeedItem } from './TransactionsScreen';
 import type { AccountTransfer, BusinessTransaction, BusinessTransactionType } from '../../../types/database.types';
 
@@ -20,10 +22,10 @@ const PILL = {
   received: { label: 'Cash in', color: '#047857', bg: '#ECFDF5' },
   paid: { label: 'Paid out', color: '#B91C1C', bg: '#FEF2F2' },
   expense: { label: 'Expense', color: '#B91C1C', bg: '#FEF2F2' },
-  sale: { label: 'Sale bill', color: '#1D4ED8', bg: '#EFF6FF' },
-  purchase: { label: 'Purchase bill', color: '#6D28D9', bg: '#F5F3FF' },
-  creditSale: { label: 'Credit sale', color: '#1D4ED8', bg: '#EFF6FF' },
-  creditPurchase: { label: 'Credit purchase', color: '#6D28D9', bg: '#F5F3FF' },
+  sale: { label: 'Sale bill', color: MONEY.in.text, bg: MONEY.in.bg },
+  purchase: { label: 'Purchase bill', color: MONEY.out.text, bg: MONEY.out.bg },
+  creditSale: { label: 'Credit sale', color: MONEY.in.text, bg: MONEY.in.bg },
+  creditPurchase: { label: 'Credit purchase', color: MONEY.out.text, bg: MONEY.out.bg },
   transfer: { label: 'Transfer', color: '#4338CA', bg: '#EEF2FF' },
 } satisfies Record<string, PillStyle>;
 
@@ -62,16 +64,23 @@ function groupLabel(date: string): string {
   return rel ? `${rel} · ${bs}` : bs;
 }
 
+/** The local calendar day ('YYYY-MM-DD') of an entry's date - a bare date as it is, a timestamp in local time. */
+function ymdOf(date: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const d = new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function timeOf(iso: string): string {
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** The Transactions list in the Day Book's cash-book layout: stat tiles and one
- * bordered table of every entry (grouped by day) with totals. Its title, filter
- * tabs and New button live in the top bar on a wide screen (no card of their
- * own); on a phone, where the bar has no room, the tabs and button sit in a
- * plain row above the tiles. */
+/** The Statement: every entry in the Day Book's cash-book layout - stat tiles and
+ * one bordered table (grouped by day) with totals. Its title, type tabs
+ * and date Filter live in the top bar on a wide screen (no card of their
+ * own); on a phone, where the bar has no room, they sit in a plain row above
+ * the tiles. */
 export function TransactionsBook({
   feed,
   filters,
@@ -80,8 +89,6 @@ export function TransactionsBook({
   locked,
   title,
   onBack,
-  onNew,
-  newLabel,
   basePath,
   categoryNameById,
   bankAccountNameById,
@@ -94,12 +101,10 @@ export function TransactionsBook({
   filters: { key: FilterKey; label: string }[];
   filter: FilterKey;
   onFilter: (f: FilterKey) => void;
-  /** Arrived for one type (Sales/Purchase/Expense) - no filter tabs, no add button. */
+  /** Arrived for one type (Sales/Purchase/Expense) - no type tabs. */
   locked: boolean;
   title: string;
   onBack?: () => void;
-  onNew?: () => void;
-  newLabel: string;
   basePath?: string;
   categoryNameById: Map<string, string>;
   bankAccountNameById: Map<string, string>;
@@ -110,35 +115,47 @@ export function TransactionsBook({
 }) {
   const layout = useBookLayout();
 
+  // The date range filters everything on the page - the table, its totals and
+  // the tiles. Empty on either side means no limit there.
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const setRange = (f: string, t: string) => {
+    setFrom(f);
+    setTo(t);
+  };
+  const shownFeed = useMemo(() => {
+    if (!from && !to) return feed;
+    return feed.filter((item) => {
+      const day = ymdOf(item.date);
+      return (!from || day >= from) && (!to || day <= to);
+    });
+  }, [feed, from, to]);
+
   // The top bar renders from stable options, so tapping must go through the
   // latest callbacks rather than whichever render registered them.
-  const live = useRef({ onFilter, onNew, onBack });
-  live.current = { onFilter, onNew, onBack };
+  const live = useRef({ onFilter, onBack });
+  live.current = { onFilter, onBack };
   const showTabs = !locked;
-  const hasNew = !!onNew;
   const hasBack = !!onBack;
   const toolbar = useBookToolbar(
     {
       title,
-      resetTitle: 'Transactions',
+      resetTitle: 'Statement',
       wide: layout.wide,
       left: hasBack ? () => <BackButton onPress={() => live.current.onBack?.()} /> : undefined,
-      right:
-        showTabs || hasNew
-          ? () => (
-              <>
-                {showTabs && <FilterTabs options={filters} value={filter} onChange={(f) => live.current.onFilter(f)} />}
-                {hasNew && <ToolbarButton icon="add" label={newLabel} onPress={() => live.current.onNew?.()} />}
-              </>
-            )
-          : undefined,
+      right: () => (
+        <>
+          {showTabs && <FilterTabs options={filters} value={filter} onChange={(f) => live.current.onFilter(f)} />}
+          <DateFilterButton from={from} to={to} onApply={setRange} />
+        </>
+      ),
     },
-    [showTabs, hasNew, hasBack, filter, filters, newLabel]
+    [showTabs, hasBack, filter, filters, from, to]
   );
 
   const rows = useMemo<Row[]>(() => {
     const goParty = (id: string) => () => basePath && router.push(`${basePath}/customer/${id}` as never);
-    return feed.map((item): Row => {
+    return shownFeed.map((item): Row => {
       const group = groupLabel(item.date);
       if (item.kind === 'business') {
         const t = item.tx;
@@ -225,20 +242,20 @@ export function TransactionsBook({
         onDelete: () => onDeleteTransfer(tr),
       };
     });
-  }, [feed, basePath, categoryNameById, bankAccountNameById, accountName, onOpenTx, onDeleteTx, onDeleteTransfer]);
+  }, [shownFeed, basePath, categoryNameById, bankAccountNameById, accountName, onOpenTx, onDeleteTx, onDeleteTransfer]);
 
   const stats = useMemo(() => {
     const sums = { sale: 0, purchase: 0, expense: 0 };
     const counts = { sale: 0, purchase: 0, expense: 0 };
     let largest = 0;
-    for (const item of feed) {
+    for (const item of shownFeed) {
       if (item.kind !== 'business') continue;
       sums[item.tx.type] += item.tx.amount;
       counts[item.tx.type] += 1;
       largest = Math.max(largest, item.tx.amount);
     }
     return { sums, counts, largest };
-  }, [feed]);
+  }, [shownFeed]);
 
   const totals = useMemo(
     () => ({
@@ -332,16 +349,16 @@ export function TransactionsBook({
       <BookStats>
         {lockedType ? (
           <>
-            <BookStat label="Total" value={`NPR ${money(lockedTotal)}`} color="#1D4ED8" />
+            <BookStat label="Total" value={`NPR ${money(lockedTotal)}`} color={lockedType === 'sale' ? MONEY.in.text : MONEY.out.text} />
             <BookStat label="Entries" value={String(lockedCount)} color="#374151" />
             <BookStat label="Average" value={`NPR ${money(lockedCount ? lockedTotal / lockedCount : 0)}`} color="#374151" />
             <BookStat label="Largest" value={`NPR ${money(stats.largest)}`} color="#374151" />
           </>
         ) : (
           <>
-            <BookStat label="Sales" value={`NPR ${money(stats.sums.sale)}`} color="#1D4ED8" />
-            <BookStat label="Purchases" value={`NPR ${money(stats.sums.purchase)}`} color="#6D28D9" />
-            <BookStat label="Expenses" value={`NPR ${money(stats.sums.expense)}`} color="#B91C1C" />
+            <BookStat label="Sales" value={`NPR ${money(stats.sums.sale)}`} color={MONEY.in.text} />
+            <BookStat label="Purchases" value={`NPR ${money(stats.sums.purchase)}`} color={MONEY.out.text} />
+            <BookStat label="Expenses" value={`NPR ${money(stats.sums.expense)}`} color={MONEY.out.text} />
             <BookStat label="Entries" value={String(rows.length)} color="#374151" />
           </>
         )}
@@ -350,7 +367,7 @@ export function TransactionsBook({
       {rows.length === 0 ? (
         <View className="items-center rounded-xl border border-gray-300 bg-white py-10">
           <Ionicons name="cash-outline" size={28} color="#D1D5DB" />
-          <Text className="mt-2 text-gray-500">No transactions yet.</Text>
+          <Text className="mt-2 text-gray-500">{from || to ? 'Nothing in this date range.' : 'Nothing in the statement yet.'}</Text>
         </View>
       ) : (
         <BookTable

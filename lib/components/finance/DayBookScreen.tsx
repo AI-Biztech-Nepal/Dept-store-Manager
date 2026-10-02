@@ -13,6 +13,7 @@ import { BankAccountPickerModal } from './BankAccountPickerModal';
 import { useWideDetail } from '../detail/DetailLayout';
 import { dateLabels, useCalendarMode } from '../../hooks/useCalendarMode';
 import { useBookToolbar } from './BookKit';
+import { MONEY } from './moneyColors';
 import { showAlert, getErrorMessage } from '../../utils/alert';
 
 type Kind = 'opening' | 'received' | 'paid' | 'expense' | 'sale' | 'purchase' | 'transfer';
@@ -75,8 +76,8 @@ const KIND: Record<Kind, { label: string; color: string; bg: string }> = {
   received: { label: 'Cash in', color: '#047857', bg: '#ECFDF5' },
   paid: { label: 'Paid out', color: '#B91C1C', bg: '#FEF2F2' },
   expense: { label: 'Expense', color: '#B91C1C', bg: '#FEF2F2' },
-  sale: { label: 'Sale bill', color: '#1D4ED8', bg: '#EFF6FF' },
-  purchase: { label: 'Purchase bill', color: '#6D28D9', bg: '#F5F3FF' },
+  sale: { label: 'Sale bill', color: MONEY.in.text, bg: MONEY.in.bg },
+  purchase: { label: 'Purchase bill', color: MONEY.out.text, bg: MONEY.out.bg },
   transfer: { label: 'Transfer', color: '#4338CA', bg: '#EEF2FF' },
 };
 
@@ -613,7 +614,7 @@ const NEW_ENTRY_KINDS: { key: string; label: string; icon: ComponentProps<typeof
   { key: 'received', label: 'Received', icon: 'arrow-down-circle', color: '#059669', path: '/quick-payment?type=in' },
   { key: 'payment-out', label: 'Payment Out', icon: 'arrow-up-circle', color: '#DC2626', path: '/quick-payment?type=out' },
   { key: 'sale', label: 'Sale', icon: 'trending-up', color: '#059669', path: '/transactions?type=sale&add=1' },
-  { key: 'purchase', label: 'Purchase', icon: 'cart', color: '#2563EB', path: '/transactions?type=purchase&add=1' },
+  { key: 'purchase', label: 'Purchase', icon: 'cart', color: '#DC2626', path: '/transactions?type=purchase&add=1' },
   { key: 'expense', label: 'Expense', icon: 'receipt', color: '#DC2626', path: '/transactions?type=expense&add=1' },
 ];
 
@@ -997,8 +998,8 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
             <Stat label="Cash in" value={book.totalIn} color="#047857" />
             <Stat label="Cash out" value={book.totalOut} color="#B91C1C" />
             <Stat label="Closing" value={book.closing} color={book.closing >= 0 ? '#2563EB' : '#DC2626'} />
-            {book.totalSales > 0 && <Stat label="Sales billed" value={book.totalSales} color="#1D4ED8" />}
-            {book.totalPurchases > 0 && <Stat label="Purchases billed" value={book.totalPurchases} color="#6D28D9" />}
+            {book.totalSales > 0 && <Stat label="Sales billed" value={book.totalSales} color={MONEY.in.text} />}
+            {book.totalPurchases > 0 && <Stat label="Purchases billed" value={book.totalPurchases} color={MONEY.out.text} />}
           </View>
 
           <DayBookTable

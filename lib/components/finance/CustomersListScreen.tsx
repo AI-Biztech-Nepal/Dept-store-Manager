@@ -517,7 +517,7 @@ export function CustomersListScreen({ basePath }: { basePath: string }) {
           <BookStat
             label="Net position"
             value={`${totalReceivable - totalPayable < 0 ? '−' : ''}NPR ${bookMoney(Math.abs(totalReceivable - totalPayable))}`}
-            color={totalReceivable - totalPayable >= 0 ? '#2563EB' : '#DC2626'}
+            color={totalReceivable - totalPayable >= 0 ? '#047857' : '#B91C1C'}
           />
           <BookStat label="Parties" value={String(merged.length)} color="#374151" />
         </BookStats>
@@ -543,7 +543,7 @@ export function CustomersListScreen({ basePath }: { basePath: string }) {
                     receive: <Text className="text-[13px] font-extrabold" style={{ color: '#047857' }}>{bookMoney(shownReceive)}</Text>,
                     pay: <Text className="text-[13px] font-extrabold" style={{ color: '#B91C1C' }}>{bookMoney(shownPay)}</Text>,
                     net: (
-                      <Text className="text-[14px] font-extrabold" style={{ color: shownNet >= 0 ? '#2563EB' : '#DC2626' }}>
+                      <Text className="text-[14px] font-extrabold" style={{ color: shownNet >= 0 ? '#047857' : '#B91C1C' }}>
                         {shownNet < 0 ? '−' : ''}
                         {bookMoney(Math.abs(shownNet))}
                       </Text>

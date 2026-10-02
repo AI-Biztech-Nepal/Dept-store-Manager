@@ -6,6 +6,7 @@
 import { type ReactNode } from 'react';
 import { Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { useScreenHeader } from '../../hooks/useScreenHeader';
 import { WEB_SIDEBAR_MIN_WIDTH } from '../web/WebSidebarShell';
 
@@ -41,7 +42,8 @@ export function FilterTabs<K extends string>({
   onChange,
 }: {
   options: { key: K; label: string }[];
-  value: K;
+  /** The selected one - or null when none is (a preset that no longer matches). */
+  value: K | null;
   onChange: (key: K) => void;
 }) {
   return (
@@ -122,6 +124,17 @@ export function ToolbarSearch({
   );
 }
 
+/** For a page whose name is already in the top bar: its back button (phones only -
+ * on a wide screen the sidebar does that job) and its main action go up there
+ * too, so the page needs no title row of its own. `right` is registered when
+ * `deps` change; read callbacks through a ref if they must be current. */
+export function useBarActions({ wide, right }: { wide: boolean; right?: () => ReactNode }, deps: readonly unknown[]) {
+  useScreenHeader(
+    { headerLeft: wide ? undefined : () => <BackButton onPress={() => router.back()} />, headerRight: right },
+    [wide, !!right, ...deps]
+  );
+}
+
 /** Below this window width the top bar has no room for a page's controls (the
  * sidebar already takes 240px of it) - they drop to a row in the page instead. */
 const TOOLBAR_IN_BAR_MIN_WIDTH = 1000;
@@ -141,13 +154,22 @@ export function useBookToolbar(
     title,
     resetTitle,
     wide,
+    inBarMinWidth,
     left,
     right,
-  }: { title?: string; resetTitle?: string; wide: boolean; left?: () => ReactNode; right?: (inBar: boolean) => ReactNode },
+  }: {
+    title?: string;
+    resetTitle?: string;
+    wide: boolean;
+    /** Window width needed to keep the controls in the bar; a page with more of them asks for more. */
+    inBarMinWidth?: number;
+    left?: () => ReactNode;
+    right?: (inBar: boolean) => ReactNode;
+  },
   deps: readonly unknown[]
 ): ReactNode {
   const { width } = useWindowDimensions();
-  const inBar = wide && width >= TOOLBAR_IN_BAR_MIN_WIDTH;
+  const inBar = wide && width >= (inBarMinWidth ?? TOOLBAR_IN_BAR_MIN_WIDTH);
   useScreenHeader({ title, resetTitle, headerLeft: left, headerRight: inBar && right ? () => right(true) : undefined }, [title, inBar, !!left, !!right, ...deps]);
   if (inBar || !right) return null;
   return (

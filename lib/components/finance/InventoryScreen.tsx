@@ -459,7 +459,7 @@ export function InventoryScreen() {
         { key: 'cost', label: 'Cost price', width: 90, align: 'right', render: (r) => (r.cost != null ? num(rs(r.cost), '#4B5563') : dash) },
         { key: 'price', label: 'Selling price', width: 100, align: 'right', render: (r) => (r.price != null ? num(rs(r.price)) : dash) },
         { key: 'sold', label: 'Sold', width: 72, align: 'right', render: (r) => num(qty(r.sold), '#047857', true) },
-        { key: 'purchased', label: 'Purchased', width: 92, align: 'right', render: (r) => num(qty(r.purchased), '#1D4ED8', true) },
+        { key: 'purchased', label: 'Purchased', width: 92, align: 'right', render: (r) => num(qty(r.purchased), '#B91C1C', true) },
         { key: 'value', label: 'Stock value', width: 108, align: 'right', render: (r) => (r.value != null ? num(money(r.value)) : dash) },
         { key: 'act', label: '', width: 40, align: 'right', render: trash },
       ]
@@ -475,7 +475,7 @@ export function InventoryScreen() {
         label: `${filteredRows.length} ${filteredRows.length === 1 ? 'item' : 'items'} · Totals`,
         cells: {
           sold: <Text className="text-[13px] font-extrabold" style={{ color: '#047857' }}>{qty(totals.sold)}</Text>,
-          purchased: <Text className="text-[13px] font-extrabold" style={{ color: '#1D4ED8' }}>{qty(totals.purchased)}</Text>,
+          purchased: <Text className="text-[13px] font-extrabold" style={{ color: '#B91C1C' }}>{qty(totals.purchased)}</Text>,
           value: <Text className="text-[13px] font-extrabold text-gray-900">{money(totals.value)}</Text>,
         },
       }

@@ -35,6 +35,8 @@ interface Props {
   partyLabel: string;
   addLabel: string;
   totalLabel: string;
+  /** The total's colour - green for money in, red for money out; defaults to `accent`. */
+  totalColor?: string;
   onUpdateRow: (key: string, patch: Partial<PaymentRow>) => void;
   /** Appends an empty row and returns its key. */
   onAddRow: () => string;
@@ -58,6 +60,7 @@ export const PaymentEntryTable = forwardRef<PaymentEntryTableHandle, Props>(func
     partyLabel,
     addLabel,
     totalLabel,
+    totalColor,
     onUpdateRow,
     onAddRow,
     onRemoveRow,
@@ -338,7 +341,7 @@ export const PaymentEntryTable = forwardRef<PaymentEntryTableHandle, Props>(func
         </Pressable>
         <View className="flex-row items-baseline gap-3 pr-2">
           <Text className="text-[13px] font-semibold text-gray-500">{totalLabel}</Text>
-          <Text className="text-xl font-extrabold" style={{ color: accent }}>
+          <Text className="text-xl font-extrabold" style={{ color: totalColor ?? accent }}>
             NPR {total.toLocaleString()}
           </Text>
         </View>

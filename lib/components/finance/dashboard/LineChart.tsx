@@ -8,6 +8,7 @@ export interface LineSeries {
   key: string;
   label: string;
   color: string;
+  /** One per label - or fewer, when the rest hasn't happened yet (the later hours of today). */
   values: number[];
   /** Soft gradient fill under the line - one series gets this, the rest stay plain lines. */
   area?: boolean;
@@ -92,7 +93,9 @@ export function LineChart({ labels, series, height = 250, formatValue, emptyText
   const x = (i: number) => (n <= 1 ? PAD.left + innerW / 2 : PAD.left + (innerW * i) / (n - 1));
   const y = (v: number) => PAD.top + innerH * (1 - v / scale.max);
   const step = n <= 1 ? innerW : innerW / (n - 1);
-  const active = selected != null && selected < n ? selected : n - 1;
+  // With no hover, the readout sits on the latest point that has data.
+  const dataLen = Math.max(0, ...series.map((s) => s.values.length));
+  const active = selected != null && selected < n ? selected : Math.max(0, Math.min(n, dataLen) - 1);
 
   // As many labels as fit (about one per 74px), always including the first and last.
   const maxLabels = Math.max(2, Math.floor(innerW / 74));
@@ -150,8 +153,8 @@ export function LineChart({ labels, series, height = 250, formatValue, emptyText
               const line = monotonePath(pts);
               return (
                 <G key={s.key}>
-                  {s.area && n > 1 && (
-                    <Path d={`${line} L${pts[n - 1].x},${y(0)} L${pts[0].x},${y(0)} Z`} fill={`url(#fill-${s.key})`} />
+                  {s.area && pts.length > 1 && (
+                    <Path d={`${line} L${pts[pts.length - 1].x},${y(0)} L${pts[0].x},${y(0)} Z`} fill={`url(#fill-${s.key})`} />
                   )}
                   <Path d={line} fill="none" stroke={s.color} strokeWidth={s.area ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round" />
                   {s.values[active] !== undefined && (
@@ -195,7 +198,7 @@ export function LineChart({ labels, series, height = 250, formatValue, emptyText
                     <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: s.color }} />
                     <Text className="text-[11px] text-gray-600">{s.label}</Text>
                   </View>
-                  <Text className="text-[11px] font-bold text-gray-900">{fmt(s.values[active] ?? 0)}</Text>
+                  <Text className="text-[11px] font-bold text-gray-900">{s.values[active] == null ? '—' : fmt(s.values[active])}</Text>
                 </View>
               ))}
             </View>

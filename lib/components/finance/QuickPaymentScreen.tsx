@@ -9,6 +9,7 @@ import { useSupabaseInsert, useSupabaseQuery, useSupabaseUpdate } from '../../ho
 import { useBankAccounts } from '../../hooks/useBankAccounts';
 import { usePhoneContacts } from '../../hooks/usePhoneContacts';
 import { useScanBill } from '../../hooks/useScanBill';
+import { useScreenHeader } from '../../hooks/useScreenHeader';
 import { BankAccountPickerModal } from './BankAccountPickerModal';
 import { ContactPickerModal } from '../ContactPickerModal';
 import { DateField } from '../DateTimeFields';
@@ -18,6 +19,7 @@ import { KeyboardDateInput } from './KeyboardDateInput';
 import { KeyboardSelect } from './KeyboardSelect';
 import { useConfirmSave } from './ConfirmSave';
 import { FINANCE_ENTRY_ACCENT, FINANCE_ENTRY_SHADOW } from './entryTheme';
+import { MONEY } from './moneyColors';
 import { readKey } from '../../utils/webKeys';
 import { showAlert, getErrorMessage } from '../../utils/alert';
 import { toBsLabel, toBsHistoryLabel } from '../../utils/nepaliDate';
@@ -201,7 +203,7 @@ function QuickPaymentForm() {
         ...(receiptNo.trim() ? [{ label: isOut ? 'Payment no.' : 'Receipt no.', value: receiptNo.trim() }] : []),
         { label: 'Paid via', value: selectedAccountName },
       ],
-      total: { label: 'Amount', value: `NPR ${value.toLocaleString()}` },
+      total: { label: 'Amount', value: `NPR ${value.toLocaleString()}`, color: isOut ? MONEY.out.base : MONEY.in.base },
     });
     if (!ok) return;
     setSaving(true);
@@ -394,7 +396,7 @@ function QuickPaymentForm() {
         ...(validRows.length > 5 ? [{ label: `+ ${validRows.length - 5} more` }] : []),
         { label: 'Paid via', value: selectedAccountName },
       ],
-      total: { label: 'Total', value: `NPR ${sum.toLocaleString()}` },
+      total: { label: 'Total', value: `NPR ${sum.toLocaleString()}`, color: isOut ? MONEY.out.base : MONEY.in.base },
     });
     if (!ok) return;
     setSaving(true);
@@ -575,29 +577,36 @@ function QuickPaymentForm() {
     </>
   );
 
+  // On web the page's name and its Scan Bill button live in the top bar; the
+  // heading that used to repeat the name under it is gone.
+  const scanRowRef = useRef<() => void>(() => {});
+  scanRowRef.current = handleScanForRow;
+  useScreenHeader(
+    Platform.OS === 'web'
+      ? {
+          title: meta.label,
+          resetTitle: 'Quick Payment',
+          headerRight: () => (
+            <Pressable
+              onPress={() => scanRowRef.current()}
+              disabled={scanning}
+              className="h-9 flex-row items-center justify-center rounded-lg border border-blue-600 bg-blue-50 px-3.5 disabled:opacity-50"
+              style={{ gap: 6 }}
+            >
+              <Ionicons name={scanning ? 'hourglass-outline' : 'camera-outline'} size={15} color="#2563EB" />
+              <Text className="text-[13px] font-semibold text-blue-700">{scanning ? 'Reading…' : 'Scan Bill'}</Text>
+            </Pressable>
+          ),
+        }
+      : {},
+    [meta.label, scanning]
+  );
+
   if (Platform.OS === 'web') {
     const accent = FINANCE_ENTRY_ACCENT;
-    const webScanBillButton = (
-      <Pressable
-        onPress={handleScanForRow}
-        disabled={scanning}
-        className="flex-row items-center justify-center gap-2 rounded-lg border border-blue-600 bg-blue-50 px-4 py-2.5 disabled:opacity-50"
-      >
-        <Ionicons name={scanning ? 'hourglass-outline' : 'camera-outline'} size={16} color="#2563EB" />
-        <Text className="text-sm font-semibold text-blue-700">{scanning ? 'Reading the slip…' : 'Scan Bill'}</Text>
-      </Pressable>
-    );
-
     return (
       <ScrollView className="flex-1 bg-gray-50" contentContainerStyle={{ paddingBottom: 60 }} keyboardShouldPersistTaps="handled">
         <View className="px-8 pt-6">
-          <View className="mb-5 flex-row items-center justify-between">
-            <Text className="text-2xl font-bold" style={{ color: accent }}>
-              {meta.label}
-            </Text>
-            {webScanBillButton}
-          </View>
-
           <View className="flex-row" style={{ gap: 24 }}>
             <View className="flex-1" style={{ minWidth: 0, maxWidth: 1500 }}>
               {/* Date/Receipt No. and Payment method apply to every row in
@@ -679,6 +688,7 @@ function QuickPaymentForm() {
                 partyLabel={payTarget === 'vendor' ? 'Vendor' : 'Customer'}
                 addLabel={`Add ${payTarget === 'vendor' ? 'vendor' : 'person'}`}
                 totalLabel={isOut ? 'Total paid out' : 'Total received'}
+                totalColor={meta.color}
                 onUpdateRow={updateRow}
                 onAddRow={addRow}
                 onRemoveRow={removeRow}
