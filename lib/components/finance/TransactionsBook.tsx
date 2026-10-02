@@ -1,11 +1,10 @@
 // lib/components/finance/TransactionsBook.tsx
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuthStore } from '../../hooks/useAuth';
 import { toBsHistoryLabel } from '../../utils/nepaliDate';
-import { BookHeader, BookPage, BookStat, BookStats, BookTable, Pill, money, useBookLayout, type BookColumn } from './BookKit';
+import { BackButton, BookPage, BookStat, BookStats, BookTable, FilterTabs, Pill, ToolbarButton, money, useBookLayout, useBookToolbar, type BookColumn } from './BookKit';
 import type { FeedItem } from './TransactionsScreen';
 import type { AccountTransfer, BusinessTransaction, BusinessTransactionType } from '../../../types/database.types';
 
@@ -68,8 +67,11 @@ function timeOf(iso: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** The Transactions list in the Day Book's cash-book layout: header card, stat
- * tiles, and one bordered table of every entry (grouped by day) with totals. */
+/** The Transactions list in the Day Book's cash-book layout: stat tiles and one
+ * bordered table of every entry (grouped by day) with totals. Its title, filter
+ * tabs and New button live in the top bar on a wide screen (no card of their
+ * own); on a phone, where the bar has no room, the tabs and button sit in a
+ * plain row above the tiles. */
 export function TransactionsBook({
   feed,
   filters,
@@ -107,7 +109,32 @@ export function TransactionsBook({
   onDeleteTransfer: (transfer: AccountTransfer) => void;
 }) {
   const layout = useBookLayout();
-  const businessName = useAuthStore((state) => state.profile?.business_name);
+
+  // The top bar renders from stable options, so tapping must go through the
+  // latest callbacks rather than whichever render registered them.
+  const live = useRef({ onFilter, onNew, onBack });
+  live.current = { onFilter, onNew, onBack };
+  const showTabs = !locked;
+  const hasNew = !!onNew;
+  const hasBack = !!onBack;
+  const toolbar = useBookToolbar(
+    {
+      title,
+      resetTitle: 'Transactions',
+      wide: layout.wide,
+      left: hasBack ? () => <BackButton onPress={() => live.current.onBack?.()} /> : undefined,
+      right:
+        showTabs || hasNew
+          ? () => (
+              <>
+                {showTabs && <FilterTabs options={filters} value={filter} onChange={(f) => live.current.onFilter(f)} />}
+                {hasNew && <ToolbarButton icon="add" label={newLabel} onPress={() => live.current.onNew?.()} />}
+              </>
+            )
+          : undefined,
+    },
+    [showTabs, hasNew, hasBack, filter, filters, newLabel]
+  );
 
   const rows = useMemo<Row[]>(() => {
     const goParty = (id: string) => () => basePath && router.push(`${basePath}/customer/${id}` as never);
@@ -300,54 +327,7 @@ export function TransactionsBook({
 
   return (
     <BookPage wide={layout.wide}>
-      <BookHeader
-        wide={layout.wide}
-        eyebrow={businessName}
-        title={title}
-        subtitle={locked ? `Every ${title.toLowerCase()} entry, newest first` : 'Sales, purchases, expenses and payments, newest first'}
-        left={
-          onBack ? (
-            <Pressable
-              onPress={onBack}
-              accessibilityLabel="Back"
-              className="h-10 w-10 items-center justify-center rounded-lg border border-gray-200"
-            >
-              <Ionicons name="chevron-back" size={18} color="#374151" />
-            </Pressable>
-          ) : undefined
-        }
-        right={
-          <>
-            {!locked && (
-              <View className="flex-row rounded-lg bg-gray-100 p-1" style={{ gap: 2 }}>
-                {filters.map((f) => {
-                  const on = f.key === filter;
-                  return (
-                    <Pressable
-                      key={f.key}
-                      onPress={() => onFilter(f.key)}
-                      className="rounded-md px-3 py-1.5"
-                      style={on ? { backgroundColor: '#fff' } : undefined}
-                    >
-                      <Text className={`text-xs font-bold ${on ? 'text-blue-700' : 'text-gray-500'}`}>{f.label}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            )}
-            {onNew && (
-              <Pressable
-                onPress={onNew}
-                className="h-10 flex-row items-center justify-center rounded-lg px-3.5"
-                style={{ backgroundColor: '#1D4ED8', gap: 6 }}
-              >
-                <Ionicons name="add" size={17} color="#FFFFFF" />
-                <Text className="text-sm font-semibold text-white">{newLabel}</Text>
-              </Pressable>
-            )}
-          </>
-        }
-      />
+      {toolbar}
 
       <BookStats>
         {lockedType ? (

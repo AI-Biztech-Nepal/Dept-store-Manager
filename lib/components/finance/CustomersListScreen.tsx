@@ -9,7 +9,7 @@ import { useAuthStore } from '../../hooks/useAuth';
 import { useSupabaseInsert, useSupabaseQuery } from '../../hooks/useSupabase';
 import { supabase } from '../../supabase';
 import { SearchBar } from '../SearchBar';
-import { BookHeader, BookPage, BookStat, BookStats, BookTable, Pill, money as bookMoney, useBookLayout, type BookColumn } from './BookKit';
+import { BookPage, BookStat, BookStats, BookTable, Pill, ToolbarButton, ToolbarSearch, money as bookMoney, useBookLayout, useBookToolbar, type BookColumn } from './BookKit';
 import { showAlert, getErrorMessage } from '../../utils/alert';
 import { isValidPhone10 } from '../../utils/phone';
 import { getLastSyncedAt, isContactsSyncEnabled, requestAndSyncPhoneContacts } from '../../utils/contactsSync';
@@ -357,11 +357,11 @@ function PhoneContactsSyncButton({ userId, compact }: { userId: string; compact?
       <Pressable
         onPress={handleSync}
         disabled={syncing}
-        className="h-10 flex-row items-center justify-center rounded-lg border border-gray-200 bg-white px-3.5 disabled:opacity-50"
+        className="h-9 flex-row items-center justify-center rounded-lg border border-gray-200 bg-white px-3.5 disabled:opacity-50"
         style={{ gap: 6 }}
       >
         <Ionicons name="sync-outline" size={15} color="#1D4ED8" />
-        <Text className="text-sm font-semibold text-blue-700">{syncing ? 'Syncing…' : 'Sync contacts'}</Text>
+        <Text className="text-[13px] font-semibold text-blue-700">{syncing ? 'Syncing…' : 'Sync contacts'}</Text>
       </Pressable>
     );
   }
@@ -445,7 +445,23 @@ export function CustomersListScreen({ basePath }: { basePath: string }) {
   }, [merged, search]);
 
   const layout = useBookLayout();
-  const businessName = useAuthStore((state) => state.profile?.business_name);
+
+  // Search, Sync contacts and New party live in the top bar on a wide screen (a
+  // plain row above the tiles on a narrow one) - web only; the phone app keeps
+  // its own list below.
+  const toolbar = useBookToolbar(
+    {
+      wide: layout.wide,
+      right: (inBar) => (
+        <>
+          <ToolbarSearch value={search} onChange={setSearch} placeholder="Search by name or phone" wide={inBar} />
+          {userId && <PhoneContactsSyncButton userId={userId} compact />}
+          <ToolbarButton icon={showAddForm ? 'close' : 'add'} label={showAddForm ? 'Close' : 'New party'} onPress={() => setShowAddForm((v) => !v)} />
+        </>
+      ),
+    },
+    [search, showAddForm, userId]
+  );
 
   // Web: the same cash-book look as the Day Book - header card, stat tiles,
   // one bordered table with totals. Phones keep the card list below.
@@ -509,46 +525,7 @@ export function CustomersListScreen({ basePath }: { basePath: string }) {
 
     return (
       <BookPage wide={layout.wide}>
-        <BookHeader
-          wide={layout.wide}
-          eyebrow={businessName}
-          title="Ledger"
-          subtitle={`${merged.length} ${merged.length === 1 ? 'party' : 'parties'} · customers and vendors`}
-          right={
-            <>
-              <View
-                className="h-10 flex-row items-center rounded-lg border border-gray-200 bg-white px-3"
-                style={layout.wide ? { width: 250 } : { flexGrow: 1 }}
-              >
-                <Ionicons name="search" size={16} color="#9CA3AF" />
-                <TextInput
-                  value={search}
-                  onChangeText={setSearch}
-                  placeholder="Search by name or phone"
-                  placeholderTextColor="#9CA3AF"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="ml-2 flex-1 text-sm text-gray-900"
-                  style={{ outlineStyle: 'none' } as object}
-                />
-                {search.length > 0 && (
-                  <Pressable onPress={() => setSearch('')} hitSlop={8}>
-                    <Ionicons name="close-circle" size={16} color="#9CA3AF" />
-                  </Pressable>
-                )}
-              </View>
-              {userId && <PhoneContactsSyncButton userId={userId} compact />}
-              <Pressable
-                onPress={() => setShowAddForm((v) => !v)}
-                className="h-10 flex-row items-center justify-center rounded-lg px-3.5"
-                style={{ backgroundColor: '#1D4ED8', gap: 6 }}
-              >
-                <Ionicons name={showAddForm ? 'close' : 'add'} size={17} color="#FFFFFF" />
-                <Text className="text-sm font-semibold text-white">{showAddForm ? 'Close' : 'New party'}</Text>
-              </Pressable>
-            </>
-          }
-        />
+        {toolbar}
 
         <BookStats>
           <BookStat label="To receive" value={`NPR ${bookMoney(totalReceivable)}`} color="#047857" onPress={() => router.push(`${basePath}/to-receive` as any)} />

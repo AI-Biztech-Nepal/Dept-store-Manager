@@ -1,10 +1,12 @@
 // lib/components/finance/BookKit.tsx
 //
-// The cash-book look the Day Book established - a header card, a strip of
-// stat tiles, one bordered table with a totals footer - as reusable pieces,
-// so Ledger and Transactions read as the same family of pages.
+// The cash-book look the Day Book established - a strip of stat tiles and one
+// bordered table with a totals footer, with each page's own controls up in the
+// top bar - as reusable pieces, so the book pages read as one family.
 import { type ReactNode } from 'react';
-import { Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useScreenHeader } from '../../hooks/useScreenHeader';
 import { WEB_SIDEBAR_MIN_WIDTH } from '../web/WebSidebarShell';
 
 /** Whole rupees with thousands separators; a dash for "nothing". */
@@ -32,39 +34,125 @@ export function BookPage({ wide, children }: { wide: boolean; children: ReactNod
   );
 }
 
-export function BookHeader({
-  eyebrow,
-  title,
-  subtitle,
-  left,
-  right,
+/** Segmented control for a page's filters - sits in the top bar on a wide screen. */
+export function FilterTabs<K extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { key: K; label: string }[];
+  value: K;
+  onChange: (key: K) => void;
+}) {
+  return (
+    <View className="flex-row rounded-lg bg-gray-100 p-1" style={{ gap: 2 }}>
+      {options.map((o) => {
+        const on = o.key === value;
+        return (
+          <Pressable
+            key={o.key}
+            onPress={() => onChange(o.key)}
+            className="rounded-md px-3 py-1.5"
+            style={on ? { backgroundColor: '#fff' } : undefined}
+          >
+            <Text className={`text-xs font-bold ${on ? 'text-blue-700' : 'text-gray-500'}`}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/** A page's main action (New sale, Add product ...). */
+export function ToolbarButton({ label, icon, onPress }: { label: string; icon: keyof typeof Ionicons.glyphMap; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      className="h-9 flex-row items-center justify-center rounded-lg px-3.5"
+      style={{ backgroundColor: '#1D4ED8', gap: 6 }}
+    >
+      <Ionicons name={icon} size={16} color="#FFFFFF" />
+      <Text className="text-[13px] font-semibold text-white">{label}</Text>
+    </Pressable>
+  );
+}
+
+export function BackButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} accessibilityLabel="Back" className="h-9 w-9 items-center justify-center rounded-lg border border-gray-200">
+      <Ionicons name="chevron-back" size={18} color="#374151" />
+    </Pressable>
+  );
+}
+
+export function ToolbarSearch({
+  value,
+  onChange,
+  placeholder,
   wide,
 }: {
-  eyebrow?: string | null;
-  title: string;
-  subtitle?: string;
-  /** Sits before the title (a back button). */
-  left?: ReactNode;
-  right?: ReactNode;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  /** A fixed-width box in the top bar; otherwise it takes the row's spare width. */
   wide: boolean;
 }) {
   return (
-    <View className="rounded-2xl border border-gray-200 bg-white px-4 py-3.5">
-      <View className={wide ? 'flex-row items-center' : ''} style={{ gap: 12 }}>
-        <View className={`flex-row items-center ${wide ? 'flex-1' : ''}`} style={{ gap: 10 }}>
-          {left}
-          <View className="flex-1">
-            {!!eyebrow && <Text className="text-[11px] font-bold uppercase tracking-wide text-gray-400">{eyebrow}</Text>}
-            <Text className="text-[17px] font-extrabold text-gray-900">{title}</Text>
-            {!!subtitle && <Text className="text-xs text-gray-500">{subtitle}</Text>}
-          </View>
-        </View>
-        {!!right && (
-          <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
-            {right}
-          </View>
-        )}
-      </View>
+    <View
+      className="h-9 flex-row items-center rounded-lg border border-gray-200 bg-white px-3"
+      style={wide ? { width: 250 } : { flexGrow: 1, minWidth: 180 }}
+    >
+      <Ionicons name="search" size={15} color="#9CA3AF" />
+      <TextInput
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor="#9CA3AF"
+        autoComplete="off"
+        spellCheck={false}
+        className="ml-2 flex-1 text-sm text-gray-900"
+        style={{ outlineStyle: 'none' } as object}
+      />
+      {value.length > 0 && (
+        <Pressable onPress={() => onChange('')} hitSlop={8} accessibilityLabel="Clear search">
+          <Ionicons name="close-circle" size={15} color="#9CA3AF" />
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+/** Below this window width the top bar has no room for a page's controls (the
+ * sidebar already takes 240px of it) - they drop to a row in the page instead. */
+const TOOLBAR_IN_BAR_MIN_WIDTH = 1000;
+
+/** Where a book page keeps its title controls: in the top bar beside the page
+ * title on a wide screen (no card of their own), and - since a phone's or a
+ * narrow window's bar has no room for them - as a plain wrapping row at the top
+ * of the page otherwise. `right` is told which one it is being drawn for.
+ * Render the returned node first inside <BookPage>.
+ *
+ * `left` (a back button) always goes in the bar. `right` is called for each
+ * placement; it is registered with the bar only when `deps` change, so list
+ * everything it reads (selected filter, search text ...) and read callbacks
+ * through a ref. */
+export function useBookToolbar(
+  {
+    title,
+    resetTitle,
+    wide,
+    left,
+    right,
+  }: { title?: string; resetTitle?: string; wide: boolean; left?: () => ReactNode; right?: (inBar: boolean) => ReactNode },
+  deps: readonly unknown[]
+): ReactNode {
+  const { width } = useWindowDimensions();
+  const inBar = wide && width >= TOOLBAR_IN_BAR_MIN_WIDTH;
+  useScreenHeader({ title, resetTitle, headerLeft: left, headerRight: inBar && right ? () => right(true) : undefined }, [title, inBar, !!left, !!right, ...deps]);
+  if (inBar || !right) return null;
+  return (
+    <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
+      {right(false)}
     </View>
   );
 }

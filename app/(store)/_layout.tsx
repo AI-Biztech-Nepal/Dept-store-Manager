@@ -44,7 +44,14 @@ export default function StoreLayout() {
     <Tabs
       backBehavior="history"
       screenOptions={{
-        header: ({ options }) => <PortalHeaderBar title={options.title} />,
+        header: ({ options }) => (
+          <PortalHeaderBar
+            title={options.title}
+            hideAccount={isWideWeb}
+            left={options.headerLeft?.({ canGoBack: false })}
+            right={options.headerRight?.({ canGoBack: false })}
+          />
+        ),
         tabBarActiveTintColor: ROLE_ACCENT.store,
         ...(isWideWeb ? { tabBarStyle: { display: 'none' } } : null),
       }}
@@ -66,7 +73,7 @@ export default function StoreLayout() {
   return (
     <RoleGuard allow={['store']}>
       {isWideWeb ? (
-        <WebSidebarShell items={NAV_ITEMS} roleLabel="Store">
+        <WebSidebarShell items={NAV_ITEMS} roleLabel="Store" profileHref="/(store)/profile">
           {tabs}
         </WebSidebarShell>
       ) : (

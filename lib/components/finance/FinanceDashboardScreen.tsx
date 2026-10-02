@@ -40,6 +40,7 @@ export function shortcuts(basePath: string): {
 }[] {
   return [
     { key: 'daybook', label: 'Day Book', icon: 'book', href: `${basePath}/daybook` },
+    { key: 'transactions', label: 'Transactions', icon: 'list', href: `${basePath}/transactions` },
     { key: 'customers', label: 'Ledger', icon: 'people', href: `${basePath}/customers` },
     { key: 'payment-in', label: 'Received', icon: 'arrow-down-circle', href: `${basePath}/quick-payment?type=in` },
     { key: 'payment-out', label: 'Payment Out', icon: 'arrow-up-circle', href: `${basePath}/quick-payment?type=out` },
@@ -58,6 +59,7 @@ export function shortcuts(basePath: string): {
 // key/label/icon/href it returns.
 const SHORTCUT_COLORS: Record<string, { bg: string; fg: string }> = {
   daybook: { bg: '#EFF6FF', fg: '#1D4ED8' },
+  transactions: { bg: '#EFF6FF', fg: '#2563EB' },
   customers: { bg: '#EFF6FF', fg: '#2563EB' },
   'payment-in': { bg: '#ECFDF5', fg: '#059669' },
   'payment-out': { bg: '#FEF2F2', fg: '#DC2626' },
@@ -267,12 +269,15 @@ export function FinanceDashboardScreen({ basePath }: { basePath: string }) {
     <View style={{ width: leftWidth }}>
       <SectionTitle>Overview</SectionTitle>
       <Card title="Financial overview">
-        <Pressable onPress={go('/bank-balances')}>
+        {/* Grows to take whatever height the row gives the card, so it never ends in a blank strip. */}
+        <Pressable onPress={go('/bank-balances')} style={{ flexGrow: 1 }}>
           <LinearGradient
             colors={['#2563EB', '#1D4ED8']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={{
+              flexGrow: 1,
+              justifyContent: 'center',
               borderRadius: 16,
               padding: 18,
               shadowColor: '#2563EB',
@@ -297,25 +302,6 @@ export function FinanceDashboardScreen({ basePath }: { basePath: string }) {
         <View className="mt-3 flex-row" style={{ gap: 12 }}>
           {overviewTile('To receive', 'Customers owe you', toReceive, '#2563EB', '#EFF6FF', '/to-receive')}
           {overviewTile('To give', 'You owe vendors', toGive, '#F59E0B', '#FFF7ED', '/to-give')}
-        </View>
-
-        <View className="mt-3 flex-row" style={{ gap: 12 }}>
-          <Pressable
-            onPress={go('/transactions')}
-            className="flex-1 flex-row items-center justify-center rounded-xl border border-gray-300 bg-white py-2.5"
-            style={{ gap: 6 }}
-          >
-            <Ionicons name="list-outline" size={15} color="#374151" />
-            <Text className="text-[13px] font-semibold text-gray-700">Transactions</Text>
-          </Pressable>
-          <Pressable
-            onPress={go('/transactions?type=purchase&add=1')}
-            className="flex-1 flex-row items-center justify-center rounded-xl py-2.5"
-            style={{ backgroundColor: BLUE, gap: 6 }}
-          >
-            <Ionicons name="cart-outline" size={15} color="#FFFFFF" />
-            <Text className="text-[13px] font-semibold text-white">Buy stock</Text>
-          </Pressable>
         </View>
       </Card>
     </View>

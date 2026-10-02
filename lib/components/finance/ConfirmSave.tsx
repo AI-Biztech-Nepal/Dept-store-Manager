@@ -47,7 +47,12 @@ function DialogButton({
   );
 }
 
-function ConfirmSaveDialog({
+/** The question itself - title, summary, total, Cancel / Yes, save - with no modal
+ * around it. A screen that is already showing its own dialog asks in place with
+ * this instead of stacking a second modal on top: React Native Web's modals each
+ * trap keyboard focus, and two of them fight over it, so Enter would never
+ * reach the Save button. */
+export function ConfirmSaveCard({
   options,
   onConfirm,
   onCancel,
@@ -65,58 +70,73 @@ function ConfirmSaveDialog({
   }, []);
 
   return (
+    <View accessibilityRole="alert">
+      <Text className="text-lg font-extrabold text-gray-900">{options.title}</Text>
+      <Text className="mt-1 text-sm text-gray-500">Please check the details before saving.</Text>
+
+      {!!options.rows?.length && (
+        <View className="mt-4 rounded-xl bg-gray-50 px-4 py-2">
+          {options.rows.map((r, i) => (
+            <View
+              key={`${r.label}-${i}`}
+              className={`flex-row items-center justify-between py-2 ${i < options.rows!.length - 1 ? 'border-b border-gray-200' : ''}`}
+              style={{ gap: 12 }}
+            >
+              <Text className="flex-1 text-[13px] text-gray-500" numberOfLines={1}>
+                {r.label}
+              </Text>
+              {!!r.value && (
+                <Text className="text-[13px] font-semibold text-gray-900" numberOfLines={1} style={{ maxWidth: '60%' }}>
+                  {r.value}
+                </Text>
+              )}
+            </View>
+          ))}
+        </View>
+      )}
+
+      {options.total && (
+        <View className="mt-3 flex-row items-baseline justify-between px-1">
+          <Text className="text-sm font-bold text-gray-900">{options.total.label}</Text>
+          <Text className="text-xl font-extrabold" style={{ color: FINANCE_ENTRY_ACCENT }}>
+            {options.total.value}
+          </Text>
+        </View>
+      )}
+
+      <View className="mt-5 flex-row" style={{ gap: 10 }}>
+        <DialogButton label="Cancel" onPress={onCancel} />
+        <DialogButton
+          label={options.confirmLabel ?? 'Yes, save'}
+          onPress={onConfirm}
+          primary
+          buttonRef={(el) => {
+            saveButton.current = el;
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+function ConfirmSaveDialog({
+  options,
+  onConfirm,
+  onCancel,
+}: {
+  options: ConfirmSaveOptions;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
     <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
       <Pressable className="flex-1 items-center justify-center bg-black/40 px-6" onPress={onCancel}>
         <Pressable
           onPress={() => {}}
-          accessibilityRole="alert"
           className="w-full rounded-2xl bg-white p-5"
           style={{ maxWidth: 400, boxShadow: '0 20px 50px rgba(16,24,40,0.25)' }}
         >
-          <Text className="text-lg font-extrabold text-gray-900">{options.title}</Text>
-          <Text className="mt-1 text-sm text-gray-500">Please check the details before saving.</Text>
-
-          {!!options.rows?.length && (
-            <View className="mt-4 rounded-xl bg-gray-50 px-4 py-2">
-              {options.rows.map((r, i) => (
-                <View
-                  key={`${r.label}-${i}`}
-                  className={`flex-row items-center justify-between py-2 ${i < options.rows!.length - 1 ? 'border-b border-gray-200' : ''}`}
-                  style={{ gap: 12 }}
-                >
-                  <Text className="flex-1 text-[13px] text-gray-500" numberOfLines={1}>
-                    {r.label}
-                  </Text>
-                  {!!r.value && (
-                    <Text className="text-[13px] font-semibold text-gray-900" numberOfLines={1} style={{ maxWidth: '60%' }}>
-                      {r.value}
-                    </Text>
-                  )}
-                </View>
-              ))}
-            </View>
-          )}
-
-          {options.total && (
-            <View className="mt-3 flex-row items-baseline justify-between px-1">
-              <Text className="text-sm font-bold text-gray-900">{options.total.label}</Text>
-              <Text className="text-xl font-extrabold" style={{ color: FINANCE_ENTRY_ACCENT }}>
-                {options.total.value}
-              </Text>
-            </View>
-          )}
-
-          <View className="mt-5 flex-row" style={{ gap: 10 }}>
-            <DialogButton label="Cancel" onPress={onCancel} />
-            <DialogButton
-              label={options.confirmLabel ?? 'Yes, save'}
-              onPress={onConfirm}
-              primary
-              buttonRef={(el) => {
-                saveButton.current = el;
-              }}
-            />
-          </View>
+          <ConfirmSaveCard options={options} onConfirm={onConfirm} onCancel={onCancel} />
         </Pressable>
       </Pressable>
     </Modal>

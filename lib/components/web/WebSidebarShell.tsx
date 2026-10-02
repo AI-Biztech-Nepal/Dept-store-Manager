@@ -49,10 +49,13 @@ export const WEB_SIDEBAR_MIN_WIDTH = 768;
 export function WebSidebarShell({
   items,
   roleLabel,
+  profileHref,
   children,
 }: {
   items: WebNavItem[];
   roleLabel: string;
+  /** Where the account block at the bottom leads (the role's profile screen). */
+  profileHref?: string;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -81,7 +84,9 @@ export function WebSidebarShell({
     const hrefPath = withoutGroups(hrefPathRaw);
     const pathMatches = pathname === hrefPath || pathname.startsWith(`${hrefPath}/`);
     if (!pathMatches) return false;
-    if (!hrefQuery) return true;
+    // A link with no query (Transactions) is the plain route - the same route
+    // opened with ?type= is one of its siblings (Sales, Purchase, Expenses).
+    if (!hrefQuery) return !searchParams.type;
     return Array.from(new URLSearchParams(hrefQuery).entries()).every(
       ([key, value]) => (searchParams[key] ?? '') === value
     );
@@ -191,7 +196,10 @@ export function WebSidebarShell({
 
         <View style={{ flex: 1 }} />
 
-        <View
+        <Pressable
+          onPress={profileHref ? () => router.push(profileHref as any) : undefined}
+          disabled={!profileHref}
+          accessibilityLabel="Account and store details"
           style={{
             flexDirection: 'row',
             alignItems: 'center',
@@ -221,7 +229,7 @@ export function WebSidebarShell({
             </Text>
             <Text style={{ fontSize: 11, color: '#9CA3AF' }}>{roleLabel}</Text>
           </View>
-        </View>
+        </Pressable>
       </View>
 
       {/* `alignItems: 'center'` here (rather than `marginHorizontal: 'auto'`
