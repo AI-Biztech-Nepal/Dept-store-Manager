@@ -322,7 +322,7 @@ function timeAgo(date: Date): string {
  * this list in sync with the phone's contacts automatically in the
  * background (useContactsSyncBootstrap), and this button just lets the
  * user force an immediate re-sync. */
-function PhoneContactsSyncButton({ userId, compact }: { userId: string; compact?: boolean }) {
+function PhoneContactsSyncButton({ userId }: { userId: string }) {
   const queryClient = useQueryClient();
   const [syncing, setSyncing] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -350,20 +350,6 @@ function PhoneContactsSyncButton({ userId, compact }: { userId: string; compact?
     } finally {
       setSyncing(false);
     }
-  }
-
-  if (compact) {
-    return (
-      <Pressable
-        onPress={handleSync}
-        disabled={syncing}
-        className="h-9 flex-row items-center justify-center rounded-lg border border-gray-200 bg-white px-3.5 disabled:opacity-50"
-        style={{ gap: 6 }}
-      >
-        <Ionicons name="sync-outline" size={15} color="#1D4ED8" />
-        <Text className="text-[13px] font-semibold text-blue-700">{syncing ? 'Syncing…' : 'Sync contacts'}</Text>
-      </Pressable>
-    );
   }
 
   return (
@@ -446,21 +432,19 @@ export function CustomersListScreen({ basePath }: { basePath: string }) {
 
   const layout = useBookLayout();
 
-  // Search, Sync contacts and New party live in the top bar on a wide screen (a
-  // plain row above the tiles on a narrow one) - web only; the phone app keeps
-  // its own list below.
+  // Search and New party live in the top bar on a wide screen (a plain row above
+  // the tiles on a narrow one) - web only; the phone app keeps its own list below.
   const toolbar = useBookToolbar(
     {
       wide: layout.wide,
       right: (inBar) => (
         <>
           <ToolbarSearch value={search} onChange={setSearch} placeholder="Search by name or phone" wide={inBar} />
-          {userId && <PhoneContactsSyncButton userId={userId} compact />}
           <ToolbarButton icon={showAddForm ? 'close' : 'add'} label={showAddForm ? 'Close' : 'New party'} onPress={() => setShowAddForm((v) => !v)} />
         </>
       ),
     },
-    [search, showAddForm, userId]
+    [search, showAddForm]
   );
 
   // Web: the same cash-book look as the Day Book - header card, stat tiles,

@@ -41,6 +41,10 @@ interface InventoryRow {
   status: StockStatus;
   /** Stock on hand at cost price; null when there's no stock level or no cost. */
   value: number | null;
+  /** An item only ever typed into bills has no tracked stock, so `stockLevel`
+   * is worked out from them (bought - sold, assuming nothing was on the shelf
+   * before the first bill) and `cost` is the average rate it was bought at. */
+  estimated?: boolean;
   product?: Product;
 }
 
@@ -154,7 +158,8 @@ function Field({
  * Transactions page uses. Stock itself is moved by a database trigger when a
  * bill is saved, edited or deleted (0002_profiles_inventory.sql) - bills match
  * products by item name. Items that only ever exist as a typed bill line
- * (finance_items) are listed too, without a stock level. */
+ * (finance_items) are listed too, as "Bills only", with a stock level and cost
+ * worked out from those bills (see `estimated`). */
 export function InventoryScreen() {
   const layout = useBookLayout();
   const userId = useAuthStore((state) => state.session?.user.id);
@@ -177,7 +182,7 @@ export function InventoryScreen() {
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<StatusFilter>('all');
-  const [editing, setEditing] = useState<{ id: string | null; form: FormState } | null>(null);
+  const [editing, setEditing] = useState<{ id: string | null; form: FormState; hint?: string } | null>(null);
   // "Save this product?" is asked inside the dialog itself (not as a second
   // modal), holding the values it will save if confirmed.
   const [confirming, setConfirming] = useState<{ options: ConfirmSaveOptions; values: ProductValues } | null>(null);
@@ -203,12 +208,16 @@ export function InventoryScreen() {
   const rows = useMemo((): InventoryRow[] => {
     const soldByName = new Map<string, number>();
     const purchasedByName = new Map<string, number>();
+    const purchaseSpendByName = new Map<string, number>();
     for (const t of transactions ?? []) {
       if (t.type !== 'sale' && t.type !== 'purchase') continue;
       const target = t.type === 'sale' ? soldByName : purchasedByName;
       for (const item of t.items) {
         const key = item.description.trim().toLowerCase();
         target.set(key, (target.get(key) ?? 0) + item.qty);
+        if (t.type === 'purchase') {
+          purchaseSpendByName.set(key, (purchaseSpendByName.get(key) ?? 0) + (Number(item.amount) || item.qty * item.rate));
+        }
       }
     }
 
@@ -244,6 +253,8 @@ export function InventoryScreen() {
         const sold = soldByName.get(key) ?? 0;
         const purchased = purchasedByName.get(key) ?? 0;
         if (sold === 0 && purchased === 0) return null;
+        const stockLevel = purchased - sold;
+        const cost = purchased > 0 ? (purchaseSpendByName.get(key) ?? 0) / purchased : null;
         return {
           key: `f-${item.id}`,
           name: item.name,
@@ -251,13 +262,15 @@ export function InventoryScreen() {
           sku: null,
           unit: null,
           price: item.rate,
-          cost: null,
-          stockLevel: null,
+          cost,
+          stockLevel,
           reorderLevel: null,
           sold,
           purchased,
           status: 'untracked',
-          value: null,
+          // Selling more than was bought on record means the opening stock was never entered - not negative money.
+          value: cost != null ? Math.max(0, stockLevel) * cost : null,
+          estimated: true,
         };
       })
       .filter((r): r is InventoryRow => r !== null);
@@ -288,8 +301,8 @@ export function InventoryScreen() {
       if (r.status === 'low') low += 1;
       if (r.status === 'out') out += 1;
     }
-    return { products: (products ?? []).length, value, low, out };
-  }, [rows, products]);
+    return { items: rows.length, value, low, out };
+  }, [rows]);
 
   const totals = useMemo(
     () => ({
@@ -369,7 +382,23 @@ export function InventoryScreen() {
   }
 
   const openEdit = (r: InventoryRow) => {
-    if (r.product) setEditing({ id: r.product.id, form: formFromProduct(r.product) });
+    if (r.product) {
+      setEditing({ id: r.product.id, form: formFromProduct(r.product) });
+      return;
+    }
+    // A "Bills only" item: open the new-product form already filled from what
+    // the bills say, so tracking it for real is a check-and-save.
+    setEditing({
+      id: null,
+      hint: 'Filled in from your bills (bought minus sold). Opening stock was never entered, so check the numbers before saving.',
+      form: {
+        ...EMPTY_FORM,
+        name: r.name,
+        price: r.price != null ? String(r.price) : '',
+        purchase_price: r.cost != null ? String(Math.round(r.cost * 100) / 100) : '',
+        stock_level: String(Math.max(0, r.stockLevel ?? 0)),
+      },
+    });
   };
   const closeDialog = () => {
     setConfirming(null);
@@ -398,7 +427,8 @@ export function InventoryScreen() {
     ) : null;
 
   const stockText = (r: InventoryRow) => (r.stockLevel == null ? null : `${qty(r.stockLevel)}${r.unit ? ` ${r.unit}` : ''}`);
-  const stockColor = (r: InventoryRow) => (r.status === 'out' ? '#B91C1C' : r.status === 'low' ? '#B45309' : '#111827');
+  const stockColor = (r: InventoryRow) =>
+    r.status === 'out' ? '#B91C1C' : r.status === 'low' ? '#B45309' : r.estimated ? (r.stockLevel! < 0 ? '#B91C1C' : '#4B5563') : '#111827';
   const subline = (r: InventoryRow) => [r.category, r.sku ? `SKU ${r.sku}` : null].filter(Boolean).join(' · ');
 
   const itemCell = (r: InventoryRow, compact: boolean) => (
@@ -509,6 +539,7 @@ export function InventoryScreen() {
             <Ionicons name="close" size={24} color="#374151" />
           </Pressable>
         </View>
+        {!!editing.hint && <Text className="-mt-2 mb-4 text-xs leading-[17px] text-gray-500">{editing.hint}</Text>}
         {formFields}
         {dialogMode ? (
           <View className="mt-2 flex-row items-center" style={{ gap: 10 }}>
@@ -546,7 +577,7 @@ export function InventoryScreen() {
       {toolbar}
 
       <BookStats>
-        <BookStat label="Products" value={String(stats.products)} color="#374151" />
+        <BookStat label="Items" value={String(stats.items)} color="#374151" />
         <BookStat label="Stock value (cost)" value={`NPR ${money(stats.value)}`} color="#1D4ED8" />
         <BookStat label="Low stock" value={String(stats.low)} color="#B45309" onPress={() => toggleFilter('low')} />
         <BookStat label="Out of stock" value={String(stats.out)} color="#B91C1C" onPress={() => toggleFilter('out')} />
@@ -563,7 +594,8 @@ export function InventoryScreen() {
 
       <Text className="px-1 text-[11.5px] leading-[17px] text-gray-400">
         Tap a product to edit it. Stock goes down when a sale is saved and up when a purchase is saved - bills match products by item name. Items marked
-        "Bills only" were typed into a bill but are not tracked products yet.
+        "Bills only" were typed into a bill but are not tracked products yet: their In stock is bought minus sold from your bills, and their cost is the
+        average rate you bought them at. Tap one to start tracking it with a real opening stock.
       </Text>
 
       <Modal
