@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView } from 'react-native';
 import { useAuthStore } from '../../lib/hooks/useAuth';
+import { AccountSecurityCard } from '../../lib/components/auth/AccountSecurityCard';
 import { useSupabaseUpdate } from '../../lib/hooks/useSupabase';
 import { showAlert, getErrorMessage } from '../../lib/utils/alert';
 
@@ -20,6 +21,7 @@ export default function StoreProfile() {
   const profile = useAuthStore((state) => state.profile);
   const setProfile = useAuthStore((state) => state.setProfile);
   const signOut = useAuthStore((state) => state.signOut);
+  const email = useAuthStore((state) => state.session?.user.email);
   const update = useSupabaseUpdate('profiles');
   const [form, setForm] = useState<Record<string, string>>(() =>
     Object.fromEntries(FIELDS.map(([k]) => [k, ((profile as any)?.[k] as string | null) ?? '']))
@@ -52,6 +54,7 @@ export default function StoreProfile() {
       <Pressable onPress={save} disabled={update.isPending} className="mt-2 items-center rounded-xl bg-blue-600 py-3.5 disabled:opacity-50">
         <Text className="text-[15px] font-bold text-white">Save</Text>
       </Pressable>
+      {email ? <AccountSecurityCard email={email} /> : null}
       <Pressable onPress={signOut} className="mt-3 items-center rounded-xl border border-gray-300 py-3.5">
         <Text className="text-[15px] font-bold text-gray-700">Sign out</Text>
       </Pressable>

@@ -5,7 +5,10 @@ import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { AppLogo } from '../../lib/components/AppLogo';
+import { PasswordInput } from '../../lib/components/auth/PasswordInput';
 import { showAlert, getErrorMessage } from '../../lib/utils/alert';
+import { resendSignupCode } from '../../lib/utils/authEmail';
+import { authErrorMessage, normalizeEmail } from '../../lib/utils/authFlow';
 import { isBiometricHardwareReady, authenticateWithBiometrics } from '../../lib/utils/biometric';
 import {
   hasBiometricCredentials,
@@ -79,14 +82,29 @@ export default function Login() {
   // Wrapping it lets the caller actually wait for the user's choice instead
   // of racing ahead (see handleLogin, which used to navigate away before
   // this alert's "Enable" handler had a chance to run).
+  //
+  // The device holds one fingerprint login at a time. When someone else signs
+  // in on a phone that already has another person's saved, the offer must
+  // still appear (as a switch) - otherwise the fingerprint button keeps
+  // signing the next person into the first person's books.
   async function offerBiometricSignIn(loggedInEmail: string, loggedInPassword: string): Promise<void> {
-    const [hasCreds, hardwareReady] = await Promise.all([hasBiometricCredentials(), isBiometricHardwareReady()]);
-    if (hasCreds || !hardwareReady) return;
+    const [saved, hardwareReady] = await Promise.all([getBiometricCredentials(), isBiometricHardwareReady()]);
+    if (!hardwareReady) return;
+    if (saved && saved.email === loggedInEmail) {
+      // Same person, and they just typed a working password - keep the saved
+      // copy current if they changed it since.
+      if (saved.password !== loggedInPassword) await saveBiometricCredentials(loggedInEmail, loggedInPassword);
+      return;
+    }
+    const title = saved ? 'Use fingerprint for this account?' : 'Sign in with fingerprint next time?';
+    const message = saved
+      ? `Fingerprint sign-in on this device is set up for ${saved.email}. Switch it to ${loggedInEmail}?`
+      : 'Skip typing your password on this device.';
     await new Promise<void>((resolve) => {
-      showAlert('Sign in with fingerprint next time?', 'Skip typing your password on this device.', [
+      showAlert(title, message, [
         { text: 'Not now', style: 'cancel', onPress: () => resolve() },
         {
-          text: 'Enable',
+          text: saved ? 'Switch' : 'Enable',
           onPress: async () => {
             try {
               const verified = await authenticateWithBiometrics();
@@ -110,7 +128,7 @@ export default function Login() {
   async function handleLogin() {
     if (isLocked) return;
 
-    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedEmail = normalizeEmail(email);
     // Checked locally so an empty tap never reaches the server - or counts
     // toward the wrong-password lockout.
     if (!trimmedEmail || !password) {
@@ -122,6 +140,13 @@ export default function Login() {
     setIsSubmitting(false);
 
     if (error) {
+      // Signed up but never entered the code. The password was right, so this
+      // isn't a failed attempt - send a fresh code and go finish verifying.
+      if (error.code === 'email_not_confirmed') {
+        await resendSignupCode(trimmedEmail);
+        router.push({ pathname: '/(auth)/verify-email', params: { email: trimmedEmail } });
+        return;
+      }
       const nextFailedAttempts = failedAttempts + 1;
       setFailedAttempts(nextFailedAttempts);
       const lockSeconds = lockoutSecondsFor(nextFailedAttempts);
@@ -129,7 +154,7 @@ export default function Login() {
         setLockedUntil(Date.now() + lockSeconds * 1000);
         showAlert('Too many attempts', `Wait ${lockSeconds}s before trying again.`);
       } else {
-        showAlert('Login failed', error.message);
+        showAlert('Login failed', authErrorMessage(error));
       }
       return;
     }
@@ -207,6 +232,8 @@ export default function Login() {
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="email"
           keyboardType="email-address"
           placeholder="you@example.com"
           placeholderTextColor="#9CA3AF"
@@ -214,14 +241,20 @@ export default function Login() {
         />
 
         <Text className="mb-1.5 text-xs font-semibold text-gray-500">Password</Text>
-        <TextInput
+        <PasswordInput
           value={password}
           onChangeText={setPassword}
-          secureTextEntry
-          placeholder="••••••••"
-          placeholderTextColor="#9CA3AF"
-          className="mb-6 rounded-xl border-[1.5px] border-gray-200 px-4 py-3.5 text-sm text-gray-900"
+          autoComplete="current-password"
+          textContentType="password"
+          containerClassName="mb-2"
         />
+
+        <Link
+          href={{ pathname: '/(auth)/forgot-password', params: email.trim() ? { email: normalizeEmail(email) } : {} }}
+          className="mb-5 self-end text-[12.5px] font-bold text-orange-600"
+        >
+          Forgot password?
+        </Link>
 
         <View className="mb-4 flex-row gap-2.5">
           <Pressable

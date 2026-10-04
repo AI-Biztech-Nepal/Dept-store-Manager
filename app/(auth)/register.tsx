@@ -5,8 +5,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { Link, router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { AppLogo } from '../../lib/components/AppLogo';
+import { PasswordInput } from '../../lib/components/auth/PasswordInput';
+import { authErrorMessage, authRedirectUrl, isValidEmail, normalizeEmail, passwordIssue } from '../../lib/utils/authFlow';
 import { showAlert } from '../../lib/utils/alert';
-
 
 export default function Register() {
   const [fullName, setFullName] = useState('');
@@ -29,23 +30,13 @@ export default function Register() {
     };
   }, []);
 
-  // Supabase's own server-side minimum is just 6 characters with no
-  // complexity requirement, and this screen previously enforced nothing on
-  // top of that - a user could register with a password like "a". This is
-  // the app's own floor, checked before the request ever goes out.
-  function passwordIssue(value: string): string | null {
-    if (value.length < 8) return 'Use at least 8 characters.';
-    if (!/[a-zA-Z]/.test(value) || !/[0-9]/.test(value)) return 'Mix letters and numbers.';
-    return null;
-  }
-
   async function handleRegister() {
-    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedEmail = normalizeEmail(email);
     if (!fullName.trim()) {
       showAlert('Add your name', 'Enter your full name so others know who they are dealing with.');
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+    if (!isValidEmail(trimmedEmail)) {
       showAlert('Check your email', 'Enter a valid email address, e.g. you@example.com.');
       return;
     }
@@ -56,19 +47,31 @@ export default function Register() {
     }
 
     setIsSubmitting(true);
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email: trimmedEmail,
       password,
-      options: { data: { full_name: fullName.trim() } },
+      options: { data: { full_name: fullName.trim() }, emailRedirectTo: authRedirectUrl() },
     });
     setIsSubmitting(false);
 
     if (error) {
-      showAlert('Registration failed', error.message);
+      showAlert('Registration failed', authErrorMessage(error));
       return;
     }
-    showAlert('Check your email', 'Confirm your account, then sign in.');
-    router.replace('/(auth)/login');
+    // With "Confirm email" switched off in Supabase, signUp signs the person
+    // in on the spot - nothing to verify.
+    if (data.session) {
+      router.replace('/');
+      return;
+    }
+    // For an address that already has an account Supabase doesn't error: it
+    // returns a user with no identities and sends no email. Without this
+    // check the next screen would wait for a code that is never coming.
+    if (data.user?.identities?.length === 0) {
+      showAlert('You already have an account', 'Sign in instead, or reset your password if you’ve forgotten it.');
+      return;
+    }
+    router.replace({ pathname: '/(auth)/verify-email', params: { email: trimmedEmail } });
   }
 
   return (
@@ -97,6 +100,8 @@ export default function Register() {
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="email"
           keyboardType="email-address"
           placeholder="you@example.com"
           placeholderTextColor="#9CA3AF"
@@ -104,14 +109,7 @@ export default function Register() {
         />
 
         <Text className="mb-1.5 text-xs font-semibold text-gray-500">Password</Text>
-        <TextInput
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          placeholder="••••••••"
-          placeholderTextColor="#9CA3AF"
-          className="rounded-xl border-[1.5px] border-gray-200 px-4 py-3.5 text-sm text-gray-900"
-        />
+        <PasswordInput value={password} onChangeText={setPassword} autoComplete="new-password" textContentType="newPassword" />
         <Text className="mb-6 mt-1.5 text-[11px] text-gray-400">At least 8 characters, with letters and numbers.</Text>
 
         <Pressable

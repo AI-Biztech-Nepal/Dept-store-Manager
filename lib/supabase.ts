@@ -1,5 +1,6 @@
 // lib/supabase.ts
 import 'react-native-url-polyfill/auto';
+import { Platform } from 'react-native';
 import { createClient } from '@supabase/supabase-js';
 import { SecureAuthStorage } from './utils/secureAuthStorage';
 import type { Database } from '../types/database.types';
@@ -30,6 +31,9 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     storageKey: AUTH_STORAGE_KEY,
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: false,
+    // On the website an emailed confirmation link brings the person back with
+    // their session in the address bar; reading it signs them straight in.
+    // Phones have no address bar, so there it stays off.
+    detectSessionInUrl: Platform.OS === 'web',
   },
 });

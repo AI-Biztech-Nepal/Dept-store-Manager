@@ -42,3 +42,16 @@ export async function clearBiometricCredentials(): Promise<void> {
   if (isWeb) return;
   await SecureStore.deleteItemAsync(key);
 }
+
+/** After a password change: keeps fingerprint sign-in working for the account
+ * it was set up for. Another account's saved login is left alone, and so is
+ * a device with nothing saved. */
+export async function updateBiometricPasswordIfSaved(email: string, newPassword: string): Promise<void> {
+  try {
+    const saved = await getBiometricCredentials();
+    if (saved && saved.email === email) await saveBiometricCredentials(email, newPassword);
+  } catch {
+    // Best-effort: a failure here only means the next fingerprint sign-in
+    // is rejected and falls back to the password screen.
+  }
+}
