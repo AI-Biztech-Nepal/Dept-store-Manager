@@ -1,4 +1,4 @@
-# Store Books
+# Finance
 
 Inventory, billing and finance for a department store. Split out of Jageer Nepal:
 same UI/UX, same money rules (bills are debts, payments are money, Day Book, two

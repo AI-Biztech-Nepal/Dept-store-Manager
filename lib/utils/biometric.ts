@@ -29,7 +29,7 @@ export async function authenticateWithBiometrics(): Promise<boolean> {
   // back to the phone's device-credential prompt - which on some Samsung
   // devices surfaces as a Samsung account sign-in, not a local PIN.
   const result = await LocalAuthentication.authenticateAsync({
-    promptMessage: 'Unlock Store Books',
+    promptMessage: 'Unlock Finance',
     disableDeviceFallback: true,
     cancelLabel: 'Cancel',
   });

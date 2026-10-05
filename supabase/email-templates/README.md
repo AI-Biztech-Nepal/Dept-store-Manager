@@ -36,7 +36,7 @@ nothing. Plug in your own SMTP provider:
 | Field | Value |
 |---|---|
 | Sender email | an address you control (must be allowed by the provider) |
-| Sender name | `Store Books` |
+| Sender name | `Finance` |
 | Host / Port | from your provider |
 | Username / Password | from your provider |
 
@@ -57,8 +57,8 @@ matching template and set its subject:
 
 | Supabase template | File | Subject |
 |---|---|---|
-| Confirm sign up | `confirm-signup.html` | `{{ .Token }} is your Store Books verification code` |
-| Reset password | `reset-password.html` | `{{ .Token }} is your Store Books password reset code` |
+| Confirm sign up | `confirm-signup.html` | `{{ .Token }} is your Finance verification code` |
+| Reset password | `reset-password.html` | `{{ .Token }} is your Finance password reset code` |
 
 The default templates contain a link, not the code. The app asks for the
 code, so keep `{{ .Token }}` in the body.

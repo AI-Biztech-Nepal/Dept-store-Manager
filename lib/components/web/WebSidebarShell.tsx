@@ -118,7 +118,7 @@ export function WebSidebarShell({
           >
             <Ionicons name="storefront" size={17} color="#fff" />
           </View>
-          <Text style={{ fontSize: 15, fontWeight: '800', color: '#111827' }}>Store Books</Text>
+          <Text style={{ fontSize: 15, fontWeight: '800', color: '#111827' }}>Finance</Text>
         </View>
 
         <View style={{ gap: 2 }}>
