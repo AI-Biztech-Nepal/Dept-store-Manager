@@ -41,16 +41,15 @@ export function shortcuts(basePath: string): {
 }[] {
   return [
     { key: 'daybook', label: 'Day Book', icon: 'book', href: `${basePath}/daybook` },
-    { key: 'transactions', label: 'Statement', icon: 'document-text', href: `${basePath}/transactions` },
-    { key: 'customers', label: 'Ledger', icon: 'people', href: `${basePath}/customers` },
-    { key: 'payment-in', label: 'Received', icon: 'arrow-down-circle', href: `${basePath}/quick-payment?type=in` },
-    { key: 'payment-out', label: 'Payment Out', icon: 'arrow-up-circle', href: `${basePath}/quick-payment?type=out` },
     { key: 'sales', label: 'Sales', icon: 'trending-up', href: `${basePath}/transactions?type=sale&add=1` },
     { key: 'purchase', label: 'Purchase', icon: 'cart', href: `${basePath}/transactions?type=purchase&add=1` },
+    { key: 'payment-in', label: 'Received', icon: 'arrow-down-circle', href: `${basePath}/quick-payment?type=in` },
+    { key: 'payment-out', label: 'Payment', icon: 'arrow-up-circle', href: `${basePath}/quick-payment?type=out` },
     { key: 'expenses', label: 'Expenses', icon: 'receipt', href: `${basePath}/transactions?type=expense&add=1` },
+    { key: 'customers', label: 'Ledger', icon: 'people', href: `${basePath}/customers` },
+    { key: 'transactions', label: 'Statement', icon: 'document-text', href: `${basePath}/transactions` },
+    { key: 'inventory', label: 'Inventory / Stock', icon: 'cube', href: `${basePath}/inventory` },
     { key: 'bank-accounts', label: 'Bank Accounts', icon: 'business', href: `${basePath}/bank-accounts` },
-    { key: 'import-statement', label: 'Import Statement', icon: 'document-attach', href: `${basePath}/import-statement` },
-    { key: 'inventory', label: 'Inventory', icon: 'cube', href: `${basePath}/inventory` },
     { key: 'report', label: 'Report', icon: 'bar-chart', href: `${basePath}/report` },
   ];
 }
@@ -68,7 +67,6 @@ const SHORTCUT_COLORS: Record<string, { bg: string; fg: string }> = {
   purchase: { bg: '#FEF2F2', fg: '#DC2626' },
   expenses: { bg: MONEY.out.bg, fg: MONEY.out.base },
   'bank-accounts': { bg: '#EEF2FF', fg: '#4F46E5' },
-  'import-statement': { bg: '#F0FDFA', fg: '#0D9488' },
   inventory: { bg: '#F5F3FF', fg: '#7C3AED' },
   report: { bg: '#EFF6FF', fg: '#2563EB' },
   quotation: { bg: '#FDF4FF', fg: '#A21CAF' },
