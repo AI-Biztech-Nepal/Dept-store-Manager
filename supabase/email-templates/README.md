@@ -16,8 +16,8 @@ developer lands on a page that doesn't exist for them.
 
 | Setting | Value |
 |---|---|
-| Site URL | `https://dept-store-manager.vercel.app` |
-| Redirect URLs | `https://dept-store-manager.vercel.app/**` and, for local testing, `http://localhost:8081/**` |
+| Site URL | `https://finance-drab-three.vercel.app` |
+| Redirect URLs | `https://finance-drab-three.vercel.app/**` and, for local testing, `http://localhost:8081/**` |
 
 The app sends each person back to the site they signed up on (live or
 localhost), but Supabase only honours an address that is in **Redirect URLs**;
