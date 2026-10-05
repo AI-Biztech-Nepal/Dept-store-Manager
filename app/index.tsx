@@ -6,8 +6,12 @@ import { useAuthStore } from '../lib/hooks/useAuth';
 export default function Index() {
   const session = useAuthStore((state) => state.session);
   const profile = useAuthStore((state) => state.profile);
+  const isRecovering = useAuthStore((state) => state.isRecovering);
 
   if (!session) return <Redirect href="/(auth)/login" />;
+
+  // Opened from a reset-password email: they choose a new password first.
+  if (isRecovering) return <Redirect href="/(auth)/reset-password" />;
 
   // Session is restored a tick before the profile row arrives; showing a
   // spinner (instead of redirecting to login) is what keeps a page refresh

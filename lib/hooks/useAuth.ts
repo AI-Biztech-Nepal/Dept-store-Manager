@@ -1,5 +1,6 @@
 // lib/hooks/useAuth.ts
 import { useEffect } from 'react';
+import { Platform } from 'react-native';
 import { create } from 'zustand';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, AUTH_STORAGE_KEY } from '../supabase';
@@ -7,11 +8,24 @@ import { SecureAuthStorage } from '../utils/secureAuthStorage';
 import { queryClient } from '../providers/QueryProvider';
 import type { Profile, UserRole } from '../../types/database.types';
 
+/** True when this page was opened from the link in a password-reset email.
+ * Supabase signs that visit in and puts `type=recovery` in the address; read
+ * here, while the module loads, because supabase-js clears the address once it
+ * has taken the session out of it. Only the website can be opened that way. */
+function openedFromRecoveryLink(): boolean {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
+  return /[#&]type=recovery(&|$)/.test(window.location.hash);
+}
+
 interface AuthState {
   session: Session | null;
   profile: Profile | null;
   isLoading: boolean;
+  /** Signed in only by a reset link: the app shows "choose a new password"
+   * until it's set, instead of the dashboard. */
+  isRecovering: boolean;
   setSession: (session: Session | null) => void;
+  setRecovering: (recovering: boolean) => void;
   setProfile: (profile: Profile | null) => void;
   setLoading: (loading: boolean) => void;
   signOut: () => Promise<void>;
@@ -21,7 +35,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   session: null,
   profile: null,
   isLoading: true,
+  isRecovering: openedFromRecoveryLink(),
   setSession: (session) => set({ session }),
+  setRecovering: (isRecovering) => set({ isRecovering }),
   setProfile: (profile) => set({ profile }),
   setLoading: (isLoading) => set({ isLoading }),
   // Deliberately does NOT clear saved fingerprint sign-in credentials here -
@@ -51,7 +67,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
     await SecureAuthStorage.removeItem(AUTH_STORAGE_KEY);
     queryClient.clear();
-    set({ session: null, profile: null });
+    set({ session: null, profile: null, isRecovering: false });
   },
 }));
 
@@ -60,7 +76,7 @@ export const useAuthStore = create<AuthState>((set) => ({
  * state changes. Mount this once near the root of the app (see app/_layout.tsx).
  */
 export function useAuthListener() {
-  const { setSession, setProfile, setLoading } = useAuthStore();
+  const { setSession, setProfile, setLoading, setRecovering } = useAuthStore();
 
   useEffect(() => {
     let isMounted = true;
@@ -77,8 +93,12 @@ export function useAuthListener() {
     // alone already fires once with the fully-restored session (or null)
     // as soon as the client finishes reading it from storage, so that's
     // the only source of truth this needs.
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (!isMounted) return;
+      // The reset link signs the person in; hold them on "choose a new
+      // password" until they have (see app/(auth)/reset-password.tsx).
+      if (event === 'PASSWORD_RECOVERY') setRecovering(true);
+      if (event === 'SIGNED_OUT') setRecovering(false);
       setSession(session);
       if (session?.user) {
         loadProfile(session.user.id);
@@ -92,7 +112,7 @@ export function useAuthListener() {
       isMounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [setSession, setProfile, setLoading]);
+  }, [setSession, setProfile, setLoading, setRecovering]);
 }
 
 export function useRole(): UserRole | null {

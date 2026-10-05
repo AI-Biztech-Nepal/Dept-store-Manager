@@ -1,9 +1,11 @@
 # Email setup (so anyone can sign up with their own address)
 
 The app sends no email itself. Sign-up confirmation and password reset are
-emails sent by **Supabase Auth**, and the app asks the person to type the
-6-digit code from them. This is Supabase dashboard configuration, so it has to
-be done once per Supabase project. None of it can be done from the app's code.
+emails sent by **Supabase Auth**. Sign-up confirmation asks the person to type
+the 6-digit code from the email; **password reset sends a link** that opens a
+"Choose a new password" screen (new password + confirm). This is Supabase
+dashboard configuration, so it has to be done once per Supabase project. None
+of it can be done from the app's code.
 
 ## 0. Point Supabase at the live website (required)
 
@@ -50,18 +52,20 @@ sending limit against how many people will register.
 After saving, raise **Authentication -> Rate Limits -> Emails sent** if the
 default is too low for you.
 
-## 2. Use the code templates (required)
+## 2. Templates
 
-**Authentication -> Emails -> Templates**, paste the file's contents into the
-matching template and set its subject:
+**Authentication -> Emails -> Templates**. Custom templates only take effect once
+custom SMTP (step 1) is on; until then Supabase sends its default emails.
 
-| Supabase template | File | Subject |
-|---|---|---|
-| Confirm sign up | `confirm-signup.html` | `{{ .Token }} is your Finance verification code` |
-| Reset password | `reset-password.html` | `{{ .Token }} is your Finance password reset code` |
+| Supabase template | File | Subject | Must contain |
+|---|---|---|---|
+| Reset password | `reset-password.html` | `Reset your Finance password` | `{{ .ConfirmationURL }}` (the link) |
+| Confirm sign up | `confirm-signup.html` | `{{ .Token }} is your Finance verification code` | `{{ .Token }}` (the code) |
 
-The default templates contain a link, not the code. The app asks for the
-code, so keep `{{ .Token }}` in the body.
+**Reset password** must keep its link: the default template already has one, so
+the reset flow works even without editing it. **Confirm sign up** is the one
+that needs the code: the app asks for it, and the default template contains a
+link instead.
 
 ## 3. Check the sign-in settings
 
@@ -81,8 +85,8 @@ around between releases; look for these names):
 1. Open the app, **Create account** with an address you can read, and check
    the inbox (and spam) for the code.
 2. Enter it. You should land on the dashboard.
-3. Sign out, tap **Forgot password?**, enter the same address, enter the new
-   code and a new password.
+3. Sign out, tap **Forgot password?**, enter the same address, open the link in
+   the email, then type a new password twice.
 4. Register a second account with a different address. Each account only
    ever sees its own customers, bills, stock and bank accounts (row-level
    security on every table; `owner_id` is the signed-in user).

@@ -20,6 +20,7 @@ function queryParams(params: Record<string, string | string[] | undefined>): Rec
 export function RoleGuard({ allow, children }: PropsWithChildren<{ allow: UserRole[] }>) {
   const session = useAuthStore((state) => state.session);
   const profile = useAuthStore((state) => state.profile);
+  const isRecovering = useAuthStore((state) => state.isRecovering);
   const pathname = usePathname();
   const params = useGlobalSearchParams();
 
@@ -44,6 +45,11 @@ export function RoleGuard({ allow, children }: PropsWithChildren<{ allow: UserRo
 
   if (!session || !profile) {
     return <Redirect href="/(auth)/login" />;
+  }
+
+  // Signed in by a reset-password link: no app screens until the new password is set.
+  if (isRecovering) {
+    return <Redirect href="/(auth)/reset-password" />;
   }
 
   if (wrongPortal) {

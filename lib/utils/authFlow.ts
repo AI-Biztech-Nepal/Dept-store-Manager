@@ -68,6 +68,10 @@ const MESSAGES: Record<string, string> = {
  * server's own message for anything not listed above. */
 export function authErrorMessage(error: { code?: string; message: string }): string {
   if (error.code && MESSAGES[error.code]) return MESSAGES[error.code];
+  // updateUser with no session: the reset link was used up or timed out.
+  if (/auth session missing/i.test(error.message)) {
+    return 'This reset link has expired. Request a new one from the sign-in screen.';
+  }
   // verifyOtp reports a wrong code as a bare 403 whose message is this text.
   if (/token has expired or is invalid/i.test(error.message)) return MESSAGES.otp_expired;
   return error.message;

@@ -80,6 +80,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   useAuthListener();
   const isLoading = useAuthStore((state) => state.isLoading);
   const userId = useAuthStore((state) => state.session?.user.id);
+  const isRecovering = useAuthStore((state) => state.isRecovering);
 
   useBiometricLockBootstrap(userId);
   useContactsSyncBootstrap(userId);
@@ -95,7 +96,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (userId && biometricEnabled && biometricLocked) {
+  if (userId && !isRecovering && biometricEnabled && biometricLocked) {
     return <BiometricLockScreen />;
   }
 
@@ -106,7 +107,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // wrapped here to avoid double padding; screens rendered inside a
   // <Modal> (chat, pickers, etc.) are also unaffected since Modal portals
   // outside this tree.
-  const content = userId ? <KeyboardSafeArea>{children}</KeyboardSafeArea> : <WebFrame>{children}</WebFrame>;
+  // Someone who arrived through a reset-password link is signed in, but only
+  // to choose a new password, so they get the pre-login frame, not the app's.
+  const content =
+    userId && !isRecovering ? <KeyboardSafeArea>{children}</KeyboardSafeArea> : <WebFrame>{children}</WebFrame>;
 
   return (
     <>{content}</>

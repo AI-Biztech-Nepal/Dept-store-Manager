@@ -10,14 +10,15 @@ Nothing here reads or writes Jageer's database.
 2. Run `supabase/migrations/0001_finance.sql`, then `0002_profiles_inventory.sql`
    (SQL editor or psql). Then the smoke test at the bottom of 0001 (see `finance-port/00_STEP_BY_STEP.md` 1.4-1.5).
 3. `npm install`, then `npm run web` (or `npm run android`).
-4. **Set up email** (`supabase/email-templates/README.md`): custom SMTP + the two code templates.
-   Without it, only your own Supabase team's addresses receive sign-up and reset codes.
+4. **Set up email** (`supabase/email-templates/README.md`): custom SMTP + the sign-up code template.
+   Without it, only your own Supabase team's addresses receive sign-up codes and reset links.
 5. Register in the app, fill Store Details (profile), add bank accounts, add products.
 
 ## Accounts
 Anyone can register with their own email. Each account is a separate set of books (every table is
-owner-scoped with row-level security). Sign-up and password reset use a 6-digit code emailed by
-Supabase; **Profile -> Change password** asks for a code too. Signing in on a shared phone keeps
+owner-scoped with row-level security). Sign-up uses a 6-digit code emailed by Supabase. Password
+reset (and **Profile -> Change password**) emails a link that opens a "Choose a new password"
+screen: new password and confirm. Signing in on a shared phone keeps
 fingerprint sign-in tied to one account at a time and asks before switching it.
 
 ## What differs from Jageer
