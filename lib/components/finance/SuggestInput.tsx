@@ -1,12 +1,15 @@
 // lib/components/finance/SuggestInput.tsx
 import { useState, type ReactNode } from 'react';
 import { Pressable, Text, TextInput, View, type StyleProp, type TextStyle } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { readKey } from '../../utils/webKeys';
 
 export interface SuggestOption {
   key: string;
   label: string;
   hint?: string | null;
+  /** 'add' draws the row as a "+ Add ..." action instead of a match. */
+  kind?: 'add';
 }
 
 export type PickVia = 'enter' | 'tab' | 'click';
@@ -156,12 +159,21 @@ export function SuggestInput({
               key={o.key}
               tabIndex={-1}
               onPress={() => choose(o, 'click')}
-              className="flex-row items-center justify-between px-3 py-2"
+              className={`flex-row items-center justify-between px-3 py-2 ${o.kind === 'add' && i > 0 ? 'mt-1 border-t border-gray-100' : ''}`}
               style={{ backgroundColor: i === activeIndex ? `${accent}14` : 'transparent' }}
             >
-              <Text className="flex-1 text-sm text-gray-900" numberOfLines={1}>
-                {o.label}
-              </Text>
+              {o.kind === 'add' ? (
+                <>
+                  <Ionicons name="add-circle" size={16} color={accent} />
+                  <Text className="ml-2 flex-1 text-sm font-semibold" style={{ color: accent }} numberOfLines={1}>
+                    {o.label}
+                  </Text>
+                </>
+              ) : (
+                <Text className="flex-1 text-sm text-gray-900" numberOfLines={1}>
+                  {o.label}
+                </Text>
+              )}
               {!!o.hint && <Text className="ml-2 text-[11px] text-gray-400">{o.hint}</Text>}
             </Pressable>
           ))}

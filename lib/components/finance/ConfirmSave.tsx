@@ -12,15 +12,17 @@ export interface ConfirmSaveOptions {
   confirmLabel?: string;
 }
 
-function DialogButton({
+export function DialogButton({
   label,
   onPress,
   primary,
+  disabled,
   buttonRef,
 }: {
   label: string;
   onPress: () => void;
   primary?: boolean;
+  disabled?: boolean;
   buttonRef?: (el: View | null) => void;
 }) {
   const [focused, setFocused] = useState(false);
@@ -28,7 +30,8 @@ function DialogButton({
   return (
     <Pressable
       ref={buttonRef}
-      onPress={onPress}
+      onPress={disabled ? undefined : onPress}
+      disabled={disabled}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       accessibilityRole="button"
@@ -38,6 +41,7 @@ function DialogButton({
           ? { backgroundColor: accent }
           : { backgroundColor: '#fff', borderWidth: 1, borderColor: '#D1D5DB' },
         focused ? { boxShadow: `0 0 0 3px ${accent}40` } : null,
+        disabled ? { opacity: 0.5 } : null,
         { outlineStyle: 'none' } as object,
       ]}
     >

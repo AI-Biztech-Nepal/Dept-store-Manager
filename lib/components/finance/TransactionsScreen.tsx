@@ -24,6 +24,7 @@ import { useAvailableAmounts, optionLabel } from '../../hooks/useAvailableAmount
 import { ExpenseEntryTable, type ExpenseEntryRow as ExpenseRow, type ExpenseEntryTableHandle } from './ExpenseEntryTable';
 import { KeyInput } from './KeyInput';
 import { useConfirmSave } from './ConfirmSave';
+import { AddStockItemDialog } from './AddStockItemDialog';
 import { TransactionsBook } from './TransactionsBook';
 import { BookTable, type BookColumn } from './BookKit';
 import { FINANCE_ENTRY_ACCENT, FINANCE_ENTRY_SHADOW } from './entryTheme';
@@ -52,6 +53,7 @@ interface ItemRowState {
   description: string;
   qty: string;
   rate: string;
+  hsCode?: string;
 }
 
 let expenseRowSeq = 0;
@@ -605,6 +607,7 @@ function TransactionForm({
     enabled: !!userId,
   });
   const createFinanceItem = useSupabaseUpsert('finance_items', 'owner_id,name');
+  const createProduct = useSupabaseInsert('products');
   const phoneContacts = usePhoneContacts();
   const { scanning, pickAndScan } = useScanBill();
   // Pre-fills the party picker's search box with whatever name Scan Bill
@@ -625,10 +628,15 @@ function TransactionForm({
   const [billNo, setBillNo] = useState(initial?.bill_no ?? '');
   const [billDate, setBillDate] = useState(initial?.bill_date ?? todayIso());
   const [items, setItems] = useState<ItemRowState[]>(
-    initial ? initial.items.map((i) => ({ description: i.description, qty: String(i.qty), rate: String(i.rate) })) : []
+    initial
+      ? initial.items.map((i) => ({ description: i.description, qty: String(i.qty), rate: String(i.rate), hsCode: i.hs_code ?? '' }))
+      : []
   );
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
+  // The "Add new stock item" popup opened from the desktop item dropdown: which
+  // row asked for it, and the name / rate typed there so far.
+  const [addStockFor, setAddStockFor] = useState<{ index: number; name: string; rate: string } | null>(null);
 
   // Discount is typed as a plain NPR amount (its % is only ever a derived
   // read-out); VAT is typed as a percentage (defaulting to Nepal's standard
@@ -796,21 +804,66 @@ function TransactionForm({
     setShowItemPicker(false);
     setEditingItemIndex(null);
   }
+  // A purchase brings stock in, so an item it names that isn't on the shelf
+  // yet becomes a real product (the shelf is what the stock trigger moves -
+  // 0002_profiles_inventory.sql - and a bill line only counts toward stock
+  // when its name matches a product). It starts at 0: the trigger adds this
+  // bill's own quantity when the bill is saved, so seeding it with the
+  // quantity here would count it twice. The rate on a purchase is what it
+  // cost, so it goes in as the cost price, not the selling price.
+  async function addStockItem(name: string, rate: string) {
+    try {
+      await createProduct.mutateAsync({
+        owner_id: userId,
+        name,
+        price: 0,
+        purchase_price: Number(rate) > 0 ? Number(rate) : null,
+        stock_level: 0,
+      });
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      // Already on the shelf under this name (the list was just out of date) -
+      // the bill line matches it by name, so there is nothing left to do.
+      if (/duplicate key/i.test(msg)) return;
+      showAlert('Added to this bill, but could not add it to your stock', msg);
+    }
+  }
+
+  // Save on the popup: the line takes the item (quantity 1 unless one was typed)
+  // and the caret moves on to Qty; the item itself is created in the background.
+  function saveNewStockItem(name: string, rate: string) {
+    if (!addStockFor) return;
+    const { index } = addStockFor;
+    setAddStockFor(null);
+    const row = items[index];
+    if (row) updateItem(index, { ...row, description: name, qty: row.qty.trim() ? row.qty : '1', rate });
+    setTimeout(() => itemsTableRef.current?.focusRow(index, 1), 80);
+    void addStockItem(name, rate);
+  }
+  // Cancel: nothing is created and the line stays as typed, caret back in it.
+  function cancelNewStockItem() {
+    const index = addStockFor?.index;
+    setAddStockFor(null);
+    if (index != null) setTimeout(() => itemsTableRef.current?.focusRow(index, 0), 80);
+  }
+
   // Typing a brand-new item used to only ever add it to this one bill's
   // line items, invisibly to the catalog - the next time "Pick from your
   // stock" opened, that same name wouldn't show up, since nothing was ever
-  // saved anywhere. `products` isn't the right place either - a reseller
-  // can only add a row there by stocking an admin-approved catalog item
-  // (products_insert_seller_from_catalog, 0015_product_catalog.sql), not by
-  // typing an arbitrary name while billing - so this saves it to the
-  // separate, Finance-only finance_items table instead (0063), which has no
-  // such restriction.
+  // saved anywhere. On a purchase it is added to the stock (above); on a
+  // sale it is saved to the separate, Finance-only finance_items table
+  // instead, since selling something never stocked shouldn't create a
+  // product sitting at negative stock.
   async function handlePickCustomItem(name: string, rate: string) {
     const row: ItemRowState = { description: name, qty: '1', rate: rate.trim() };
     if (editingItemIndex != null) updateItem(editingItemIndex, row);
     else setItems((prev) => [...prev, row]);
     setShowItemPicker(false);
     setEditingItemIndex(null);
+    if (type === 'purchase') {
+      await addStockItem(name, rate);
+      return;
+    }
     try {
       await createFinanceItem.mutateAsync({ owner_id: userId, name, rate: Number(rate) || null });
     } catch (err) {
@@ -823,11 +876,14 @@ function TransactionForm({
     if (isBill) {
       const validItems = items.filter(isSavableItem);
       if (validItems.length === 0) {
-        showAlert('Add at least one item', 'Enter a description, quantity, and rate for at least one item.');
+        showAlert('Add at least one item', 'Enter a description and a quantity for at least one item. The rate can be left blank.');
         return;
       }
-      if (grandTotal <= 0) {
-        showAlert('Check the total', 'The grand total must be more than zero — check item amounts and discount/VAT.');
+      // A bill with no rates yet (amount 0) is fine - it records the goods and
+      // moves stock, and the amount can be filled in later by editing it. Only a
+      // negative total (discount bigger than the items) is a mistake.
+      if (grandTotal < 0) {
+        showAlert('Check the total', 'The discount is more than the items add up to — check the discount and VAT.');
         return;
       }
       if (!customerId && !partyName.trim()) {
@@ -879,6 +935,7 @@ function TransactionForm({
             qty: Number(r.qty),
             rate: Number(r.rate),
             amount: Number(r.qty) * Number(r.rate),
+            ...(r.hsCode?.trim() ? { hs_code: r.hsCode.trim() } : {}),
           })),
           discount_amount: Math.round(discountAmount),
           vat_amount: vatAmount,
@@ -1284,7 +1341,7 @@ function TransactionForm({
   useEffect(() => {
     if (!desktopWeb || !isBill) return;
     const last = items[items.length - 1];
-    if (!last || last.description.trim() || last.qty.trim() || last.rate.trim()) {
+    if (!last || last.description.trim() || last.qty.trim() || last.rate.trim() || last.hsCode?.trim()) {
       setItems((prev) => [...prev, { description: '', qty: '', rate: '' }]);
     }
   }, [items, isBill, desktopWeb]);
@@ -1599,6 +1656,8 @@ function TransactionForm({
               onUpdate={updateItem}
               onRemove={removeItem}
               onRequestSave={handleSave}
+              onAddStockItem={type === 'purchase' ? (name, rate, index) => setAddStockFor({ index, name, rate }) : undefined}
+              showHsCode={type === 'purchase'}
               onExit={() => discountRef.current?.focus()}
               footer={
                 <View
@@ -1645,7 +1704,7 @@ function TransactionForm({
                               setTimeout(() => (discountRef.current as unknown as HTMLInputElement | null)?.select?.(), 0);
                             }}
                             inputRef={discountRef}
-                            onEnter={() => vatRef.current?.focus()}
+                            onEnter={() => (showVat ? vatRef : remarkRef).current?.focus()}
                             onRequestSave={handleSave}
                             accent={accent}
                             numeric
@@ -1687,37 +1746,71 @@ function TransactionForm({
                         </Text>
                       </View>
                     </View>
-                    <View className="flex-row items-center justify-between py-1">
-                      <Text className="text-[13px] text-gray-500">VAT (%)</Text>
-                      <View className="flex-row items-center" style={{ gap: 8 }}>
-                        <View style={{ width: 84 }}>
-                          <KeyInput
-                            value={vatPercent}
-                            onChangeText={setVatPercent}
-                            inputRef={vatRef}
-                            onEnter={() => remarkRef.current?.focus()}
-                            onRequestSave={handleSave}
-                            accent={accent}
-                            numeric
-                            align="right"
-                            accessibilityLabel="VAT percent"
-                            className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-gray-900"
-                          />
+                    {showVat ? (
+                      <View className="flex-row items-center justify-between py-1">
+                        <View className="flex-row items-center" style={{ gap: 6 }}>
+                          <Text className="text-[13px] text-gray-500">VAT (%)</Text>
+                          <Pressable
+                            onPress={() => {
+                              setShowVat(false);
+                              setVatPercent('0');
+                            }}
+                            tabIndex={-1}
+                            hitSlop={6}
+                            accessibilityLabel="Remove VAT"
+                          >
+                            <Ionicons name="close-circle" size={14} color="#9CA3AF" />
+                          </Pressable>
                         </View>
-                        <Pressable
-                          onPress={() => setVatPercent('13')}
-                          tabIndex={-1}
-                          className="items-center rounded-md border border-gray-300 bg-white px-1.5 py-0.5"
-                          style={{ width: 42 }}
-                          accessibilityLabel="Use standard 13 percent VAT"
-                        >
-                          <Text className="text-[11px] font-semibold text-gray-500">13%</Text>
-                        </Pressable>
-                        <Text className="text-right text-[13px] font-semibold text-gray-700" style={{ width: 70 }}>
-                          + {vatAmount.toLocaleString()}
-                        </Text>
+                        <View className="flex-row items-center" style={{ gap: 8 }}>
+                          <View style={{ width: 84 }}>
+                            <KeyInput
+                              value={vatPercent}
+                              onChangeText={setVatPercent}
+                              inputRef={vatRef}
+                              onEnter={() => remarkRef.current?.focus()}
+                              onRequestSave={handleSave}
+                              accent={accent}
+                              numeric
+                              align="right"
+                              accessibilityLabel="VAT percent"
+                              className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-gray-900"
+                            />
+                          </View>
+                          <Pressable
+                            onPress={() => setVatPercent('13')}
+                            tabIndex={-1}
+                            className="items-center rounded-md border border-gray-300 bg-white px-1.5 py-0.5"
+                            style={{ width: 42 }}
+                            accessibilityLabel="Use standard 13 percent VAT"
+                          >
+                            <Text className="text-[11px] font-semibold text-gray-500">13%</Text>
+                          </Pressable>
+                          <Text className="text-right text-[13px] font-semibold text-gray-700" style={{ width: 70 }}>
+                            + {vatAmount.toLocaleString()}
+                          </Text>
+                        </View>
                       </View>
-                    </View>
+                    ) : (
+                      // VAT is optional: a bill saves without it, and adding it starts
+                      // at Nepal's standard 13%, which can be typed over.
+                      <Pressable
+                        onPress={() => {
+                          setShowVat(true);
+                          setVatPercent((v) => (!v.trim() || Number(v) === 0 ? '13' : v));
+                          setTimeout(() => vatRef.current?.focus(), 50);
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Add VAT"
+                        className="flex-row items-center self-start py-1"
+                        style={{ gap: 5 }}
+                      >
+                        <Ionicons name="add-circle" size={14} color={accent} />
+                        <Text className="text-[13px] font-semibold" style={{ color: accent }}>
+                          Add VAT
+                        </Text>
+                      </Pressable>
+                    )}
                     <View className="mt-2 flex-row items-center justify-between border-t border-gray-300 pt-2.5">
                       <Text className="text-sm font-bold text-gray-900">G. Total</Text>
                       <Text className="text-xl font-extrabold" style={{ color: TYPE_META[type].color }}>
@@ -1759,6 +1852,15 @@ function TransactionForm({
         </View>
 
         {confirmDialog}
+
+        {addStockFor && (
+          <AddStockItemDialog
+            initialName={addStockFor.name}
+            initialRate={addStockFor.rate}
+            onSave={saveNewStockItem}
+            onCancel={cancelNewStockItem}
+          />
+        )}
 
         <ContactPickerModal
           visible={showPartyPicker}
@@ -2189,7 +2291,7 @@ function TransactionRow({
 
 // The widths of the bill's item columns - the Total column is as wide as the Amount column
 // above it, so the sums line up under the figures they add up.
-const BILL_COL = { sn: 38, qty: 46, rate: 72, amount: 88 };
+const BILL_COL = { sn: 38, hs: 72, qty: 46, rate: 72, amount: 88 };
 
 /** One cell of the bill's item table. It is a View of its own so that its rule (the line on
  * its right edge - the last cell has none) shows the same everywhere - a border on a Text does
@@ -2285,6 +2387,8 @@ export function TransactionDetailModal({
   // sub-total, less the discount, plus the VAT.
   const subtotal = tx.items.reduce((sum, item) => sum + item.amount, 0);
   const showSubtotal = tx.items.length > 0 && (tx.discount_amount > 0 || tx.vat_amount > 0);
+  // Only bills that carry an HS code get the column, so older bills look as they did.
+  const showHsCode = tx.items.some((item) => !!item.hs_code);
   const hasBillNo = isBill && !!tx.bill_no;
 
   return (
@@ -2356,6 +2460,7 @@ export function TransactionDetailModal({
                     <BillCell head align="center" width={BILL_COL.sn}>
                       S.N.
                     </BillCell>
+                    {showHsCode && <BillCell head width={BILL_COL.hs}>HS Code</BillCell>}
                     <BillCell head>Item</BillCell>
                     <BillCell head align="right" width={BILL_COL.qty}>
                       Qty
@@ -2372,6 +2477,11 @@ export function TransactionDetailModal({
                       <BillCell align="center" width={BILL_COL.sn} textClass="text-gray-500">
                         {idx + 1}
                       </BillCell>
+                      {showHsCode && (
+                        <BillCell width={BILL_COL.hs} textClass="text-gray-500">
+                          {item.hs_code ?? ''}
+                        </BillCell>
+                      )}
                       <BillCell textClass="text-gray-900">{item.description}</BillCell>
                       <BillCell align="right" width={BILL_COL.qty}>
                         {item.qty}

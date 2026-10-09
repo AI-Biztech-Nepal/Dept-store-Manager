@@ -10,14 +10,20 @@ export interface BillItemRow {
   description: string;
   qty: string;
   rate: string;
+  hsCode?: string;
 }
 
 export interface BillItemsTableHandle {
-  focusRow: (index: number, col?: 0 | 1 | 2) => void;
+  focusRow: (index: number, col?: 0 | 1 | 2 | 3) => void;
 }
 
-type Col = 0 | 1 | 2;
+// 0 Item, 1 Qty, 2 Rate, 3 HS code. HS code sits left of Item on screen but is
+// left out of the Enter walk (Item > Qty > Rate > next row), so entering a bill
+// is as fast as before; click it, or Shift+Tab from Item, to fill it in.
+type Col = 0 | 1 | 2 | 3;
+const HS_COL_WIDTH = 110;
 const MAX_SUGGESTIONS = 6;
+const ADD_STOCK_ITEM_KEY = '__add-stock-item__';
 
 interface ItemSuggestion {
   key: string;
@@ -34,6 +40,14 @@ interface Props {
   onUpdate: (index: number, next: BillItemRow) => void;
   onRemove: (index: number) => void;
   onRequestSave: () => void;
+  /** When set, a name that isn't a stock item yet gets an "Add as new stock
+   * item" row at the bottom of the dropdown; choosing it calls this with the
+   * name and rate typed so far and the row it was typed in. The owner shows
+   * its Save / Cancel popup and fills the row in (see `focusRow`) only if the
+   * item is saved - the row is left exactly as typed until then. */
+  onAddStockItem?: (name: string, rate: string, index: number) => void;
+  /** Adds the HS Code column (Purchase only). */
+  showHsCode?: boolean;
   /** Enter on the blank last row: the list is finished, move on (to Discount). */
   onExit: () => void;
   /** Rendered inside the card under the rows (the totals band). */
@@ -41,7 +55,7 @@ interface Props {
 }
 
 function isBlank(row: BillItemRow): boolean {
-  return !row.description.trim() && !row.qty.trim() && !row.rate.trim();
+  return !row.description.trim() && !row.qty.trim() && !row.rate.trim() && !row.hsCode?.trim();
 }
 
 function amountOf(row: BillItemRow): number {
@@ -53,7 +67,7 @@ function cleanNumber(v: string): string {
 }
 
 export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function BillItemsTable(
-  { items, products, financeItems, accent, onUpdate, onRemove, onRequestSave, onExit, footer },
+  { items, products, financeItems, accent, onUpdate, onRemove, onRequestSave, onAddStockItem, showHsCode, onExit, footer },
   ref
 ) {
   const inputRefs = useRef<Record<string, TextInput | null>>({});
@@ -103,10 +117,16 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
     return matches.slice(0, MAX_SUGGESTIONS);
   }, [focusedItemIndex, items, catalog]);
 
-  const suggestionOptions = useMemo<SuggestOption[]>(
-    () => suggestions.map((s) => ({ key: s.key, label: s.name, hint: s.hint })),
-    [suggestions]
-  );
+  const suggestionOptions = useMemo<SuggestOption[]>(() => {
+    const options: SuggestOption[] = suggestions.map((s) => ({ key: s.key, label: s.name, hint: s.hint }));
+    const typed = focusedItemIndex != null ? (items[focusedItemIndex]?.description.trim() ?? '') : '';
+    // Only a real product counts as "already in stock" - a name that was merely
+    // typed into an earlier bill (financeItems) can still be promoted here.
+    if (onAddStockItem && typed && !products.some((p) => p.name.trim().toLowerCase() === typed.toLowerCase())) {
+      options.push({ key: ADD_STOCK_ITEM_KEY, label: `Add "${typed}" as new stock item`, kind: 'add' });
+    }
+    return options;
+  }, [suggestions, focusedItemIndex, items, products, onAddStockItem]);
 
   function focusCell(index: number, col: Col) {
     inputRefs.current[`${index}:${col}`]?.focus();
@@ -119,7 +139,8 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
       onRequestSave();
     } else if (k.key === 'Enter') {
       k.prevent();
-      if (col < 2) focusCell(index, (col + 1) as Col);
+      if (col === 3) focusCell(index, 0);
+      else if (col < 2) focusCell(index, (col + 1) as Col);
       else if (index < items.length - 1) focusCell(index + 1, 0);
       else onExit();
     } else if (k.key === 'ArrowDown' && index < items.length - 1) {
@@ -169,6 +190,11 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
         <Text className="text-center text-[11px] font-bold uppercase tracking-wider text-gray-500" style={{ width: 36 }}>
           #
         </Text>
+        {showHsCode && (
+          <Text className={headClass} style={{ width: HS_COL_WIDTH }}>
+            HS Code
+          </Text>
+        )}
         <Text className={headClass} style={{ flex: 1 }}>
           Item
         </Text>
@@ -198,15 +224,42 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
               {index + 1}
             </Text>
 
+            {showHsCode && (
+              <View style={{ width: HS_COL_WIDTH }}>
+                <TextInput
+                  ref={(el) => {
+                    inputRefs.current[`${index}:3`] = el;
+                  }}
+                  value={row.hsCode ?? ''}
+                  onChangeText={(v) => onUpdate(index, { ...row, hsCode: cleanNumber(v) })}
+                  onFocus={() => setFocusedCell({ index, col: 3 })}
+                  onBlur={() => setFocusedCell((cur) => (cur?.index === index && cur.col === 3 ? null : cur))}
+                  onKeyPress={(e) => handleKeyPress(e, index, 3)}
+                  placeholder="HS code"
+                  placeholderTextColor="#B2B8C1"
+                  keyboardType="numeric"
+                  accessibilityLabel={`HS code, row ${index + 1}`}
+                  selectTextOnFocus
+                  className={cellClass}
+                  style={cellStyle(index, 3)}
+                />
+              </View>
+            )}
+
             <View style={{ flex: 1, minWidth: 0 }}>
               <SuggestInput
                 value={row.description}
                 onChangeText={(v) => onUpdate(index, { ...row, description: v })}
                 options={focusedItemIndex === index ? suggestionOptions : []}
                 onSelectOption={(opt, via) => {
+                  if (opt.key === ADD_STOCK_ITEM_KEY) {
+                    onAddStockItem?.(row.description.trim(), row.rate, index);
+                    return;
+                  }
                   const s = suggestions.find((x) => x.key === opt.key);
                   if (!s) return;
                   onUpdate(index, {
+                    ...row,
                     description: s.name,
                     qty: row.qty.trim() ? row.qty : '1',
                     rate: s.rate != null ? String(s.rate) : row.rate,
