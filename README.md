@@ -17,8 +17,9 @@ Nothing here reads or writes Jageer's database.
 ## Accounts
 Anyone can register with their own email. Each account is a separate set of books (every table is
 owner-scoped with row-level security). Sign-up uses a 6-digit code emailed by Supabase. Password
-reset (and **Profile -> Change password**) emails a link that opens a "Choose a new password"
-screen: new password and confirm. Signing in on a shared phone keeps
+reset ("Forgot password?") emails a link that opens a "Choose a new password" screen: new
+password and confirm. **Profile -> Change password** needs no email: current password, new
+password and confirm (the current one is checked first). Signing in on a shared phone keeps
 fingerprint sign-in tied to one account at a time and asks before switching it.
 
 ## What differs from Jageer
