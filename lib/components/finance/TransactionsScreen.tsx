@@ -1,13 +1,14 @@
 // lib/components/finance/TransactionsScreen.tsx
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BackHandler, View, Text, TextInput, Pressable, Modal, ScrollView, FlatList, KeyboardAvoidingView, Platform } from 'react-native';
 import { KeyboardAwareSectionList } from 'react-native-keyboard-aware-scroll-view';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore, useRole } from '../../hooks/useAuth';
-import { useSupabaseInsert, useSupabaseQuery, useSupabaseUpdate, useSupabaseUpsert, useSupabaseDelete } from '../../hooks/useSupabase';
+import { useSupabaseInsert, useSupabaseQuery, useSupabaseRow, useSupabaseUpdate, useSupabaseUpsert, useSupabaseDelete } from '../../hooks/useSupabase';
 import { useBankAccounts } from '../../hooks/useBankAccounts';
 import { useScreenHeader } from '../../hooks/useScreenHeader';
+import { useIsWideWeb } from '../../hooks/useWideGrid';
 import { usePhoneContacts } from '../../hooks/usePhoneContacts';
 import { useScanBill } from '../../hooks/useScanBill';
 import { DateField } from '../DateTimeFields';
@@ -18,9 +19,13 @@ import { ToggleSwitch } from '../ToggleSwitch';
 import { FormSection } from './FormSection';
 import { BillItemsTable, type BillItemsTableHandle } from './BillItemsTable';
 import { KeyboardDateInput } from './KeyboardDateInput';
+import { KeyboardSelect } from './KeyboardSelect';
+import { useAvailableAmounts, optionLabel } from '../../hooks/useAvailableAmounts';
+import { ExpenseEntryTable, type ExpenseEntryRow as ExpenseRow, type ExpenseEntryTableHandle } from './ExpenseEntryTable';
 import { KeyInput } from './KeyInput';
 import { useConfirmSave } from './ConfirmSave';
 import { TransactionsBook } from './TransactionsBook';
+import { BookTable, type BookColumn } from './BookKit';
 import { FINANCE_ENTRY_ACCENT, FINANCE_ENTRY_SHADOW } from './entryTheme';
 import { SuggestInput, type SuggestOption } from './SuggestInput';
 import { buildCustomerSuggestions, type CustomerSuggestion } from '../../utils/customerSuggestions';
@@ -56,17 +61,8 @@ function makeExpenseRowKey() {
 }
 
 // Web only: recording several expenses under one Date/Payment method in a
-// single save, same "shared voucher, per-row table" shape as Quick Payment's
-// multi-entry table - see the web branch of TransactionForm below.
-interface ExpenseRow {
-  key: string;
-  partyName: string;
-  customerId: string | null;
-  categoryId: string | null;
-  amount: string;
-  note: string;
-}
-
+// single save, same "shared voucher, per-row table" shape as Received / Payment
+// Out - see ExpenseEntryTable and the web branch of TransactionForm below.
 function emptyExpenseRow(): ExpenseRow {
   return { key: makeExpenseRowKey(), partyName: '', customerId: null, categoryId: null, amount: '', note: '' };
 }
@@ -339,8 +335,26 @@ const FILTERS: { key: 'all' | BusinessTransactionType; label: string }[] = [
  * the live summary card, so a reseller can glance at their last few
  * Sale/Purchase/Expense entries without leaving the form. Sale/Purchase/
  * Expense all read business_transactions directly (Payment In/Out's own
- * version of this lives in QuickPaymentScreen, over the ledger tables). */
-function RecentEntriesCard({ userId, type, color }: { userId: string; type: BusinessTransactionType; color: string }) {
+ * version of this lives in QuickPaymentScreen, over the ledger tables).
+ *
+ * Laid out as a small table (party and date, amount). Each entry opens the
+ * same read-only receipt the list uses (`onOpen`), which carries the Edit and
+ * Delete buttons - so a mistake can be fixed or removed from here without
+ * leaving the entry screen. `activeId` marks the entry currently loaded in the
+ * form. */
+function RecentEntriesCard({
+  userId,
+  type,
+  color,
+  activeId,
+  onOpen,
+}: {
+  userId: string;
+  type: BusinessTransactionType;
+  color: string;
+  activeId?: string;
+  onOpen?: (tx: BusinessTransaction) => void;
+}) {
   const { data } = useSupabaseQuery('business_transactions', {
     filters: { owner_id: userId, type },
     orderBy: { column: 'created_at', ascending: false },
@@ -348,30 +362,53 @@ function RecentEntriesCard({ userId, type, color }: { userId: string; type: Busi
   });
   const recent = (data ?? []).slice(0, 5);
 
+  const columns: BookColumn<BusinessTransaction>[] = [
+    {
+      key: 'party',
+      label: 'Party',
+      render: (tx) => (
+        <View style={{ minWidth: 0 }}>
+          <Text numberOfLines={1} className="text-xs font-semibold text-gray-800">
+            {tx.party_name || 'Unnamed'}
+          </Text>
+          <Text className="text-[10px] text-gray-400">
+            {toBsHistoryLabel(tx.bill_date ?? tx.created_at)}
+            {activeId === tx.id ? ' · editing' : ''}
+          </Text>
+        </View>
+      ),
+    },
+    {
+      key: 'amount',
+      label: 'Amount',
+      width: 84,
+      align: 'right',
+      render: (tx) => (
+        <Text className="text-xs font-bold" style={{ color, fontVariant: ['tabular-nums'] }}>
+          {tx.amount.toLocaleString()}
+        </Text>
+      ),
+    },
+  ];
+
   return (
-    <View className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
-      <Text className="mb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400">
-        Recent {TYPE_META[type].label}s
-      </Text>
+    <View className="mt-4">
+      <Text className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Recent {TYPE_META[type].label}s</Text>
+      {!!onOpen && recent.length > 0 && (
+        <Text className="mb-2 mt-0.5 text-[10.5px] text-gray-400">Tap an entry to view, edit or delete it</Text>
+      )}
       {recent.length === 0 ? (
-        <Text className="text-xs text-gray-400">No entries yet.</Text>
+        <View className="mt-2 rounded-xl border border-gray-300 bg-white p-4">
+          <Text className="text-xs text-gray-400">No entries yet.</Text>
+        </View>
       ) : (
-        recent.map((tx, i) => (
-          <View
-            key={tx.id}
-            className={`flex-row items-center justify-between py-2 ${i < recent.length - 1 ? 'border-b border-gray-50' : ''}`}
-          >
-            <View className="flex-1 pr-2">
-              <Text numberOfLines={1} className="text-xs font-semibold text-gray-800">
-                {tx.party_name || 'Unnamed'}
-              </Text>
-              <Text className="text-[10px] text-gray-400">{toBsHistoryLabel(tx.bill_date ?? tx.created_at)}</Text>
-            </View>
-            <Text className="text-xs font-bold" style={{ color }}>
-              NPR {tx.amount.toLocaleString()}
-            </Text>
-          </View>
-        ))
+        <BookTable
+          columns={columns}
+          rows={recent}
+          rowKey={(tx) => tx.id}
+          onRowPress={onOpen}
+          highlight={(tx) => tx.id === activeId}
+        />
       )}
     </View>
   );
@@ -528,6 +565,8 @@ function TransactionForm({
   customers,
   products,
   voicePrefill,
+  presetPartyId,
+  onOpenRecent,
   onDone,
   onCancel,
 }: {
@@ -538,9 +577,16 @@ function TransactionForm({
   customers: Customer[];
   products: Product[];
   voicePrefill?: { amount?: string; party?: string; date?: string; note?: string } | null;
+  /** A saved party to start the bill with - "New Sale" from their statement. */
+  presetPartyId?: string;
+  /** Opens an entry from the Recent list (web) - see RecentEntriesCard. */
+  onOpenRecent?: (tx: BusinessTransaction) => void;
   onDone: () => void;
   onCancel: () => void;
 }) {
+  // The keyboard-driven desk layout is for a wide web screen; a phone (or a
+  // phone browser) gets the same touch form the native app does.
+  const desktopWeb = useIsWideWeb();
   const createTx = useSupabaseInsert('business_transactions');
   const { confirm: confirmSave, dialog: confirmDialog } = useConfirmSave();
   const updateTx = useSupabaseUpdate('business_transactions');
@@ -570,6 +616,8 @@ function TransactionForm({
   // Expense: date + addable name + a managed category + amount + remark.
   const [amount, setAmount] = useState(initial && initial.type === 'expense' ? String(initial.amount) : '');
   const [expenseDate, setExpenseDate] = useState(initial?.bill_date ?? todayIso());
+  // Money in each place, shown in the Payment method dropdown of a new expense.
+  const available = useAvailableAmounts(type === 'expense' && !initial ? userId : undefined);
   const [categoryId, setCategoryId] = useState<string | null>(initial?.expense_category_id ?? null);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
 
@@ -592,8 +640,10 @@ function TransactionForm({
   // Web: the discount can be typed as a percent of the subtotal or as an NPR
   // amount - whichever was typed last drives the other, so a percent keeps
   // following the subtotal as items change. Native only ever uses the amount.
+  // An existing discount shows in rupees, exactly as saved; otherwise the same
+  // default as a new bill.
   const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>(
-    Platform.OS === 'web' && !initial ? 'percent' : 'amount'
+    desktopWeb && !(initial && initial.discount_amount > 0) ? 'percent' : 'amount'
   );
   const [discountPercentInput, setDiscountPercentInput] = useState('');
   // Defaults to 0 (not 13) for a brand-new bill - the VAT row itself starts
@@ -843,7 +893,7 @@ function TransactionForm({
         // The typeahead lets an item be typed straight into the bill; one
         // that isn't in the catalog yet is remembered for next time, like
         // "Add as new item" in the picker popup does.
-        if (Platform.OS === 'web') {
+        if (desktopWeb) {
           const known = new Set([
             ...products.map((p) => p.name.trim().toLowerCase()),
             ...(financeItems ?? []).map((f) => f.name.trim().toLowerCase()),
@@ -939,6 +989,20 @@ function TransactionForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voicePrefill]);
 
+  // Starts a new bill with the party it was opened for. The customer list can
+  // still be loading on the first render, so this waits for it - and runs once,
+  // so choosing someone else afterwards is never undone.
+  const presetApplied = useRef(false);
+  useEffect(() => {
+    if (presetApplied.current || !presetPartyId || initial || !isBill) return;
+    const party = customers.find((c) => c.id === presetPartyId);
+    if (!party) return;
+    presetApplied.current = true;
+    setPartyName(party.name);
+    setCustomerId(party.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetPartyId, customers]);
+
   // Fills in whatever Scan Bill could read off the photo; the reseller still
   // reviews and can edit every field afterward, and still has to actually
   // tap-confirm the party (see partyPickerQuery above) since a misread name
@@ -994,7 +1058,22 @@ function TransactionForm({
   // platform). Purely additive: the single-entry amount/partyName/categoryId
   // state and handleSave above are untouched and still drive every other
   // path (native, sale/purchase, and editing).
-  const [expenseRows, setExpenseRows] = useState<ExpenseRow[]>([emptyExpenseRow()]);
+  // Editing an expense is the same table page as adding one, with just its one row.
+  const editingExpense = !!initial && initial.type === 'expense';
+  const [expenseRows, setExpenseRows] = useState<ExpenseRow[]>(() =>
+    initial && initial.type === 'expense'
+      ? [
+          {
+            key: makeExpenseRowKey(),
+            partyName: initial.party_name ?? '',
+            customerId: initial.customer_id,
+            categoryId: initial.expense_category_id,
+            amount: String(initial.amount),
+            note: initial.note ?? '',
+          },
+        ]
+      : [emptyExpenseRow()]
+  );
   const [activePartyRowKey, setActivePartyRowKey] = useState<string | null>(null);
   const [activeCategoryRowKey, setActiveCategoryRowKey] = useState<string | null>(null);
   const [expenseRowPickerQuery, setExpenseRowPickerQuery] = useState('');
@@ -1023,7 +1102,10 @@ function TransactionForm({
   async function handleSelectNewPartyForExpenseRow(name: string, phone: string | null) {
     const key = activePartyRowKey;
     setActivePartyRowKey(null);
-    if (!key) return;
+    if (key) await attachContactToExpenseRow(key, name, phone);
+  }
+
+  async function attachContactToExpenseRow(key: string, name: string, phone: string | null) {
     if (!phone) {
       updateExpenseRow(key, { partyName: name, customerId: null });
       return;
@@ -1042,7 +1124,12 @@ function TransactionForm({
   }
 
   function selectCategoryForRow(id: string) {
-    if (activeCategoryRowKey) updateExpenseRow(activeCategoryRowKey, { categoryId: id });
+    const key = activeCategoryRowKey;
+    if (key) {
+      updateExpenseRow(key, { categoryId: id });
+      // Once the list has closed - keep typing from the Amount cell.
+      setTimeout(() => expenseTableRef.current?.focusRow(key, 2), 80);
+    }
     setActiveCategoryRowKey(null);
   }
 
@@ -1052,18 +1139,16 @@ function TransactionForm({
     phoneContacts.request();
     const scanned = await pickAndScan();
     if (!scanned) return;
-    const key = makeExpenseRowKey();
-    setExpenseRows((prev) => [
-      ...prev,
-      {
-        key,
-        partyName: scanned.vendor_name ?? '',
-        customerId: null,
-        categoryId: null,
-        amount: scanned.amount ? String(scanned.amount) : '',
-        note: scanned.note ?? '',
-      },
-    ]);
+    // Editing: the scan fills the one row. Adding: it becomes a fresh row.
+    const key = editingExpense ? expenseRows[0].key : makeExpenseRowKey();
+    const fromScan = {
+      partyName: scanned.vendor_name ?? '',
+      customerId: null,
+      categoryId: null,
+      amount: scanned.amount ? String(scanned.amount) : '',
+      note: scanned.note ?? '',
+    };
+    setExpenseRows((prev) => (editingExpense ? [{ ...prev[0], ...fromScan, categoryId: prev[0].categoryId }] : [...prev, { key, ...fromScan }]));
     if (scanned.date) setExpenseDate(scanned.date);
     if (scanned.vendor_name) {
       setExpenseRowPickerQuery(scanned.vendor_name);
@@ -1072,6 +1157,48 @@ function TransactionForm({
   }
 
   async function handleSaveAllExpenses() {
+    if (editingExpense && initial) {
+      const row = expenseRows[0];
+      const value = Number(row.amount);
+      if (!row.amount.trim() || !Number.isFinite(value) || value <= 0) {
+        showAlert('Enter an amount', 'Add a valid amount in NPR.');
+        return;
+      }
+      const categoryName = (categories ?? []).find((c) => c.id === row.categoryId)?.name;
+      const ok = await confirmSave({
+        title: 'Save changes to this expense?',
+        rows: [
+          ...(row.partyName.trim() ? [{ label: 'Paid to', value: row.partyName.trim() }] : []),
+          ...(categoryName ? [{ label: 'Category', value: categoryName }] : []),
+          { label: 'Paid via', value: selectedAccountName },
+        ],
+        total: { label: 'Amount', value: `NPR ${value.toLocaleString()}`, color: TYPE_META.expense.color },
+      });
+      if (!ok) return;
+      setSaving(true);
+      try {
+        await updateTx.mutateAsync({
+          id: initial.id,
+          values: {
+            type,
+            amount: value,
+            party_name: row.partyName.trim() || null,
+            customer_id: row.customerId,
+            note: row.note.trim() || null,
+            bill_date: expenseDate || null,
+            expense_category_id: row.categoryId,
+            payment_mode: bankAccountId ? ('bank' as const) : ('cash' as const),
+            bank_account_id: bankAccountId,
+          },
+        });
+        onDone();
+      } catch (err) {
+        showAlert('Could not save', getErrorMessage(err));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     const validRows = expenseRows.filter((r) => Number(r.amount) > 0);
     if (validRows.length === 0) {
       showAlert('Add an expense', 'Add at least one expense with a valid amount.');
@@ -1131,6 +1258,8 @@ function TransactionForm({
   const vatRef = useRef<TextInput>(null);
   const remarkRef = useRef<TextInput>(null);
   const saveButtonRef = useRef<View>(null);
+  const expenseTableRef = useRef<ExpenseEntryTableHandle>(null);
+  const methodRef = useRef<HTMLSelectElement | null>(null);
   const itemsTableRef = useRef<BillItemsTableHandle>(null);
   const [vendorFocused, setVendorFocused] = useState(false);
 
@@ -1153,22 +1282,24 @@ function TransactionForm({
   );
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || !isBill) return;
+    if (!desktopWeb || !isBill) return;
     const last = items[items.length - 1];
     if (!last || last.description.trim() || last.qty.trim() || last.rate.trim()) {
       setItems((prev) => [...prev, { description: '', qty: '', rate: '' }]);
     }
-  }, [items, isBill]);
+  }, [items, isBill, desktopWeb]);
 
   // On web the form's name and its Scan Bill button live in the top bar; the
   // heading row that used to repeat the name under it is gone.
   const newExpenses = type === 'expense' && !initial;
+  // The expense table page - the same one for adding and for editing.
+  const expenseTable = desktopWeb && type === 'expense';
   const scanRef = useRef<() => void>(() => {});
-  scanRef.current = newExpenses ? handleScanForExpenseRow : handleScan;
+  scanRef.current = expenseTable ? handleScanForExpenseRow : handleScan;
   useScreenHeader(
-    Platform.OS === 'web'
+    desktopWeb
       ? {
-          title: newExpenses ? 'New Expenses' : `${initial ? 'Edit' : 'New'} ${TYPE_META[type].label}`,
+          title: newExpenses ? 'Expenses' : `${initial ? 'Edit' : 'New'} ${TYPE_META[type].label}`,
           resetTitle: 'Statement',
           headerRight: () => (
             <Pressable
@@ -1186,109 +1317,90 @@ function TransactionForm({
     [type, initial?.id, scanning]
   );
 
-  if (Platform.OS === 'web' && type === 'expense' && !initial) {
+  if (expenseTable) {
+    const accent = FINANCE_ENTRY_ACCENT;
     return (
       <View className="mb-4">
         <View className="mb-4 flex-row" style={{ gap: 24 }}>
           <View className="flex-1" style={{ minWidth: 0, maxWidth: 1500 }}>
-            <View className="mb-5 rounded-2xl border border-gray-200 bg-white p-5">
-              <FormSection icon="calendar-outline" title="Details" first>
-                <Text className="mb-1 text-xs font-medium text-gray-500">Date</Text>
-                <DateField value={expenseDate} onChange={setExpenseDate} />
-              </FormSection>
-
-              <FormSection icon="wallet-outline" title="Payment method">
-                <Pressable
-                  onPress={() => setShowAccountPicker(true)}
-                  className="flex-row items-center justify-between rounded-lg border border-gray-300 px-3 py-2.5"
-                >
-                  <View className="flex-row items-center gap-2">
-                    <Ionicons name={bankAccountId ? 'business-outline' : 'cash-outline'} size={16} color="#6B7280" />
-                    <Text className="text-sm text-gray-900">{selectedAccountName}</Text>
-                  </View>
-                  <Ionicons name="chevron-down" size={16} color="#9CA3AF" />
-                </Pressable>
-              </FormSection>
+            {/* Date and Payment method apply to every row in the table below -
+                one voucher covering several expenses, the same shape as
+                Received. Tab/Enter walk Date -> Payment method -> the table,
+                and Ctrl+Enter saves from anywhere. */}
+            <View
+              className="mb-4 rounded-2xl border border-gray-200 bg-white px-5 py-4"
+              style={{ boxShadow: '0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.03)' }}
+            >
+              <View className="mb-3 flex-row items-center gap-2">
+                <Ionicons name="document-text-outline" size={14} color="#6B7280" />
+                <Text className="text-[11px] font-bold uppercase tracking-wider text-gray-500">Details</Text>
+              </View>
+              <View className="flex-row" style={{ gap: 14 }}>
+                <View style={{ flex: 1.3, minWidth: 0 }}>
+                  <Text className="mb-1.5 text-xs font-semibold text-gray-600">Date</Text>
+                  <KeyboardDateInput
+                    value={expenseDate}
+                    onChange={setExpenseDate}
+                    accent={accent}
+                    onEnter={() => methodRef.current?.focus()}
+                    onRequestSave={handleSaveAllExpenses}
+                  />
+                </View>
+                <View style={{ flex: 1.1, minWidth: 0 }}>
+                  <Text className="mb-1.5 text-xs font-semibold text-gray-600">Payment method</Text>
+                  <KeyboardSelect
+                    value={bankAccountId ?? '__cash__'}
+                    options={[
+                      { value: '__cash__', label: 'Cash' },
+                      ...bankAccounts.accounts.map((a) => ({ value: a.id, label: optionLabel(a.name, available?.byId[a.id]) })),
+                    ]}
+                    onChange={(v) => setBankAccountId(v === '__cash__' ? null : v)}
+                    selectRef={(el) => {
+                      methodRef.current = el;
+                    }}
+                    onEnter={() => expenseTableRef.current?.focusRow(expenseRows[0].key, 0)}
+                    onRequestSave={handleSaveAllExpenses}
+                    accent={accent}
+                    label="Payment method"
+                  />
+                </View>
+              </View>
             </View>
 
-            <View className="rounded-2xl border border-gray-200 bg-white p-5">
-              <View className="mb-3 flex-row items-center gap-1.5">
-                <Ionicons name="receipt-outline" size={13} color="#9CA3AF" />
-                <Text className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Expenses</Text>
-              </View>
+            <ExpenseEntryTable
+              ref={expenseTableRef}
+              rows={expenseRows}
+              customers={customers}
+              phoneContacts={phoneContacts.contacts}
+              categories={categories ?? []}
+              accent={accent}
+              totalColor={TYPE_META.expense.color}
+              single={editingExpense}
+              onUpdateRow={updateExpenseRow}
+              onAddRow={() => {
+                const row = emptyExpenseRow();
+                setExpenseRows((prev) => [...prev, row]);
+                return row.key;
+              }}
+              onRemoveRow={removeExpenseRow}
+              onPickCategory={setActiveCategoryRowKey}
+              onSelectContact={attachContactToExpenseRow}
+              onRequestSave={handleSaveAllExpenses}
+              onExit={() => (saveButtonRef.current as unknown as { focus?: () => void } | null)?.focus?.()}
+              autoFocusFirst
+            />
 
-              <View className="mb-1.5 flex-row gap-2 px-1">
-                <Text className="flex-1 text-[11px] font-semibold text-gray-500">Paid to</Text>
-                <Text className="flex-1 text-[11px] font-semibold text-gray-500">Category</Text>
-                <Text className="w-24 text-[11px] font-semibold text-gray-500">Amount</Text>
-                <Text className="flex-1 text-[11px] font-semibold text-gray-500">Note</Text>
-                <View style={{ width: 28 }} />
-              </View>
-
-              {expenseRows.map((row) => {
-                const rowCategory = (categories ?? []).find((c) => c.id === row.categoryId) ?? null;
-                return (
-                  <View key={row.key} className="mb-2 flex-row items-center gap-2">
-                    <Pressable
-                      onPress={() => {
-                        phoneContacts.request();
-                        setExpenseRowPickerQuery('');
-                        setActivePartyRowKey(row.key);
-                      }}
-                      className="flex-1 flex-row items-center justify-between rounded-lg border border-gray-300 bg-white px-3 py-2.5"
-                    >
-                      <Text className={`flex-1 text-sm ${row.partyName ? 'text-gray-900' : 'text-gray-400'}`} numberOfLines={1}>
-                        {row.partyName || 'Paid to?'}
-                      </Text>
-                      <Ionicons name="chevron-down" size={14} color="#9CA3AF" />
-                    </Pressable>
-                    <Pressable
-                      onPress={() => setActiveCategoryRowKey(row.key)}
-                      className="flex-1 flex-row items-center justify-between rounded-lg border border-gray-300 bg-white px-3 py-2.5"
-                    >
-                      <Text className={`flex-1 text-sm ${rowCategory ? 'text-gray-900' : 'text-gray-400'}`} numberOfLines={1}>
-                        {rowCategory?.name ?? 'Category'}
-                      </Text>
-                      <Ionicons name="chevron-down" size={14} color="#9CA3AF" />
-                    </Pressable>
-                    <TextInput
-                      value={row.amount}
-                      onChangeText={(v) => updateExpenseRow(row.key, { amount: v })}
-                      placeholder="0"
-                      placeholderTextColor="#D1D5DB"
-                      keyboardType="numeric"
-                      className="w-24 rounded-lg border border-gray-300 px-3 py-2.5 text-sm font-semibold text-gray-900"
-                    />
-                    <TextInput
-                      value={row.note}
-                      onChangeText={(v) => updateExpenseRow(row.key, { note: v })}
-                      placeholder="Optional"
-                      placeholderTextColor="#9CA3AF"
-                      className="flex-1 rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900"
-                    />
-                    <Pressable onPress={() => removeExpenseRow(row.key)} hitSlop={8} style={{ width: 28, alignItems: 'center' }}>
-                      <Ionicons name="close-circle" size={18} color={expenseRows.length > 1 ? '#DC2626' : '#E5E7EB'} />
-                    </Pressable>
-                  </View>
-                );
-              })}
-
-              <Pressable onPress={addExpenseRow} className="mt-2 flex-row items-center gap-1.5 self-start">
-                <Ionicons name="add-circle-outline" size={16} color={FINANCE_ENTRY_ACCENT} />
-                <Text className="text-sm font-semibold" style={{ color: FINANCE_ENTRY_ACCENT }}>
-                  Add expense
-                </Text>
-              </Pressable>
-
-              <View className="mt-5 flex-row gap-3 border-t border-gray-100 pt-4">
-                <Pressable onPress={onCancel} className="flex-1 items-center rounded-xl border border-gray-300 py-3">
+            <View className="mt-4 flex-row items-center justify-end" style={{ gap: 16 }}>
+              <View className="flex-row" style={{ gap: 10 }}>
+                <Pressable onPress={onCancel} className="items-center rounded-xl border border-gray-300 bg-white px-6 py-2.5">
                   <Text className="text-sm font-semibold text-gray-600">Cancel</Text>
                 </Pressable>
                 <Pressable
+                  ref={saveButtonRef}
                   onPress={handleSaveAllExpenses}
                   disabled={saving}
-                  className="flex-1 items-center rounded-xl py-3 disabled:opacity-50"
-                  style={{ backgroundColor: FINANCE_ENTRY_ACCENT }}
+                  className="items-center rounded-xl px-8 py-2.5 disabled:opacity-50"
+                  style={{ backgroundColor: accent, boxShadow: `0 2px 6px ${FINANCE_ENTRY_SHADOW}` }}
                 >
                   <Text className="text-sm font-bold text-white">{saving ? 'Saving…' : 'Save'}</Text>
                 </Pressable>
@@ -1297,7 +1409,7 @@ function TransactionForm({
           </View>
 
           <View style={{ width: 320 }}>
-            <RecentEntriesCard userId={userId} type="expense" color={FINANCE_ENTRY_ACCENT} />
+            <RecentEntriesCard userId={userId} type="expense" color={FINANCE_ENTRY_ACCENT} activeId={initial?.id} onOpen={onOpenRecent} />
           </View>
         </View>
 
@@ -1322,15 +1434,6 @@ function TransactionForm({
           onRename={handleRenameCategory}
           onDelete={handleDeleteCategory}
         />
-        <BankAccountPickerModal
-          visible={showAccountPicker}
-          accounts={bankAccounts.accounts}
-          selectedId={bankAccountId}
-          onSelect={setBankAccountId}
-          onClose={() => setShowAccountPicker(false)}
-          onRename={bankAccounts.rename}
-          onDelete={bankAccounts.remove}
-        />
       </View>
     );
   }
@@ -1344,7 +1447,7 @@ function TransactionForm({
   // it's still one bill either way. All state/handlers below are the exact
   // same ones the original single-column return further down uses -
   // nothing here is a separate calculation.
-  if (Platform.OS === 'web' && isBill) {
+  if (desktopWeb && isBill) {
     const accent = FINANCE_ENTRY_ACCENT;
     const accentShadow = FINANCE_ENTRY_SHADOW;
     const partyLabel = type === 'purchase' ? 'Vendor' : 'Customer';
@@ -1503,7 +1606,7 @@ function TransactionForm({
                   style={{ columnGap: 28, rowGap: 14, borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}
                 >
                   <View style={{ flex: 1, minWidth: 240 }}>
-                    <Text className="mb-1.5 text-xs font-semibold text-gray-600">Remark</Text>
+                    <Text className="mb-1.5 text-xs font-semibold text-gray-600">Remarks</Text>
                     <KeyInput
                       value={note}
                       onChangeText={setNote}
@@ -1512,7 +1615,7 @@ function TransactionForm({
                       onRequestSave={handleSave}
                       accent={accent}
                       placeholder="Optional"
-                      accessibilityLabel="Remark"
+                      accessibilityLabel="Remarks"
                       className="rounded-lg px-3 py-2.5 text-sm text-gray-900"
                     />
                   </View>
@@ -1645,7 +1748,13 @@ function TransactionForm({
           </View>
 
           <View style={{ width: 300 }}>
-            <RecentEntriesCard userId={userId} type={type} color={TYPE_META[type].color} />
+            <RecentEntriesCard
+              userId={userId}
+              type={type}
+              color={TYPE_META[type].color}
+              activeId={initial?.id}
+              onOpen={onOpenRecent}
+            />
           </View>
         </View>
 
@@ -1850,7 +1959,7 @@ function TransactionForm({
             <TextInput
               value={note}
               onChangeText={setNote}
-              placeholder="Remark"
+              placeholder="Remarks"
               placeholderTextColor="#9CA3AF"
               className="mt-3 rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900"
             />
@@ -1949,7 +2058,7 @@ function TransactionForm({
               keyboardType="numeric"
               className="mb-2.5 rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900"
             />
-            <Text className="mb-1 text-xs font-medium text-gray-500">Remark (optional)</Text>
+            <Text className="mb-1 text-xs font-medium text-gray-500">Remarks (optional)</Text>
             <TextInput
               value={note}
               onChangeText={setNote}
@@ -1994,6 +2103,7 @@ function TransactionForm({
         onClose={() => setShowAccountPicker(false)}
         onRename={bankAccounts.rename}
         onDelete={bankAccounts.remove}
+        available={available}
       />
       {confirmDialog}
       <ContactPickerModal
@@ -2077,144 +2187,236 @@ function TransactionRow({
   );
 }
 
+// The widths of the bill's item columns - the Total column is as wide as the Amount column
+// above it, so the sums line up under the figures they add up.
+const BILL_COL = { sn: 38, qty: 46, rate: 72, amount: 88 };
+
+/** One cell of the bill's item table. It is a View of its own so that its rule (the line on
+ * its right edge - the last cell has none) shows the same everywhere - a border on a Text does
+ * not. No width = the wide one. */
+function BillCell({
+  width,
+  ruled = true,
+  align = 'left',
+  head,
+  textClass = 'text-gray-700',
+  children,
+}: {
+  width?: number;
+  ruled?: boolean;
+  align?: 'left' | 'center' | 'right';
+  head?: boolean;
+  textClass?: string;
+  children: ReactNode;
+}) {
+  return (
+    <View
+      className={`px-2 py-2 ${ruled ? 'border-r border-gray-200' : ''}`}
+      style={[
+        width ? { width } : { flex: 1, minWidth: 0 },
+        { justifyContent: 'center', alignItems: align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start' },
+      ]}
+    >
+      <Text className={head ? 'text-[11px] font-bold text-gray-600' : `text-xs ${textClass}`}>{children}</Text>
+    </View>
+  );
+}
+
+/** One line of a printed bill: what it is in a shaded cell on the left, its value on the right. */
+function BillLine({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <View className="flex-row border-t border-gray-300">
+      <View className="justify-center border-r border-gray-300 bg-gray-50 px-3 py-2" style={{ width: 104 }}>
+        <Text className="text-[11px] font-semibold text-gray-500">{label}</Text>
+      </View>
+      <View className="flex-1 justify-center px-3 py-2" style={{ minWidth: 0 }}>
+        {children}
+      </View>
+    </View>
+  );
+}
+
+/** A line of the bill's sums: its name on the right of the wide cell, the figure under the Amount column. */
+function BillTotal({ label, value, tint, color, strong }: { label: string; value: string; tint?: string; color?: string; strong?: boolean }) {
+  return (
+    <View className={`flex-row ${strong ? `border-t border-gray-300 ${tint ?? ''}` : 'border-t border-gray-200'}`}>
+      <View className={`flex-1 justify-center border-r px-3 py-2 ${strong ? 'border-gray-300' : 'border-gray-200'}`} style={{ minWidth: 0 }}>
+        <Text className={`text-right ${strong ? 'text-xs font-bold text-gray-900' : 'text-xs text-gray-500'}`}>{label}</Text>
+      </View>
+      <View className="justify-center px-2 py-2" style={{ width: BILL_COL.amount, alignItems: 'flex-end' }}>
+        <Text
+          className={strong ? 'text-sm font-extrabold' : 'text-xs font-semibold text-gray-700'}
+          style={strong && color ? { color } : undefined}
+        >
+          {value}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 // A read-only receipt view - tapping a past transaction should let you see
 // what's in it without immediately dropping into an editable form. Edit is
-// an explicit action from here, not the default. Exported so a customer/
-// vendor's own page (CustomerDetailScreen) can reuse the same organized
-// detail view for a linked bill instead of building a second one.
+// an explicit action from here, not the default, and so is Delete (beside it,
+// only where the caller passes `onDelete`). Exported so a customer/vendor's
+// own page (CustomerDetailScreen) can reuse the same organized detail view
+// for a linked bill instead of building a second one.
 export function TransactionDetailModal({
   tx,
   categoryName,
   bankAccountName,
   onClose,
   onEdit,
+  onDelete,
 }: {
   tx: BusinessTransaction | null;
   categoryName: string | null;
   bankAccountName: string | null;
   onClose: () => void;
   onEdit: () => void;
+  onDelete?: () => void;
 }) {
   if (!tx) return null;
   const meta = TYPE_META[tx.type];
   const accountLabel = tx.bank_account_id ? bankAccountName ?? 'Bank' : 'Cash';
   const isBill = tx.type !== 'expense';
 
+  // The bill's own sums, as the Sale / Purchase form works them out: the items add up to the
+  // sub-total, less the discount, plus the VAT.
+  const subtotal = tx.items.reduce((sum, item) => sum + item.amount, 0);
+  const showSubtotal = tx.items.length > 0 && (tx.discount_amount > 0 || tx.vat_amount > 0);
+  const hasBillNo = isBill && !!tx.bill_no;
+
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable className="flex-1 items-center justify-center bg-black/40 px-6" onPress={onClose}>
-        <Pressable onPress={() => {}} className="w-full max-w-sm rounded-2xl bg-white" style={{ maxHeight: '85%' }}>
-          <ScrollView contentContainerStyle={{ padding: 18 }}>
-            <View className="mb-3 flex-row items-center justify-between">
-              <View className="flex-row items-center gap-2">
-                <View className={`h-8 w-8 items-center justify-center rounded-full ${meta.bg}`}>
-                  <Ionicons name={meta.icon} size={15} color={meta.color} />
+      <Pressable className="flex-1 items-center justify-center bg-black/40 px-4" onPress={onClose}>
+        <Pressable onPress={() => {}} className="w-full rounded-2xl bg-white" style={{ maxWidth: 640, maxHeight: '90%' }}>
+          <ScrollView contentContainerStyle={{ padding: 16 }}>
+            {/* The bill itself: one bordered sheet ruled into rows and columns, like a printed bill. */}
+            <View className="overflow-hidden rounded-lg border border-gray-300 bg-white">
+              <View className={`flex-row items-center justify-between px-3 py-2.5 ${meta.bg}`}>
+                <View className="flex-row items-center gap-2">
+                  <Ionicons name={meta.icon} size={16} color={meta.color} />
+                  <Text className="text-sm font-extrabold uppercase tracking-wide" style={{ color: meta.color }}>
+                    {isBill ? `${meta.label} bill` : meta.label}
+                  </Text>
                 </View>
-                <Text className="text-base font-bold text-gray-900">{meta.label}</Text>
+                <Pressable onPress={onClose} hitSlop={8} accessibilityLabel="Close">
+                  <Ionicons name="close" size={20} color="#6B7280" />
+                </Pressable>
               </View>
-              <Pressable onPress={onClose} hitSlop={8}>
-                <Ionicons name="close" size={20} color="#6B7280" />
-              </Pressable>
+
+              {(hasBillNo || !!tx.bill_date) && (
+                <View className="flex-row border-t border-gray-300">
+                  {hasBillNo && (
+                    <View className={`flex-1 px-3 py-2 ${tx.bill_date ? 'border-r border-gray-300' : ''}`} style={{ minWidth: 0 }}>
+                      <Text className="text-[11px] font-semibold text-gray-500">Bill No.</Text>
+                      <Text className="text-sm font-bold text-gray-900">{tx.bill_no}</Text>
+                    </View>
+                  )}
+                  {!!tx.bill_date && (
+                    <View className="flex-1 px-3 py-2" style={{ minWidth: 0 }}>
+                      <Text className="text-[11px] font-semibold text-gray-500">Date</Text>
+                      <Text className="text-sm font-bold text-gray-900">{toBsLabel(tx.bill_date)}</Text>
+                      <Text className="text-[10px] text-gray-400">{new Date(tx.bill_date).toLocaleDateString()}</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {!!tx.party_name && (
+                <BillLine label={tx.type === 'purchase' ? 'Vendor' : tx.type === 'expense' ? 'Paid to' : 'Party'}>
+                  <Text className="text-sm font-bold text-gray-900">{tx.party_name}</Text>
+                </BillLine>
+              )}
+              {!!tx.party_address && (
+                <BillLine label="Address">
+                  <Text className="text-xs text-gray-900">{tx.party_address}</Text>
+                </BillLine>
+              )}
+              {!!tx.vat_pan_no && (
+                <BillLine label="VAT/PAN">
+                  <Text className="text-xs text-gray-900">{tx.vat_pan_no}</Text>
+                </BillLine>
+              )}
+              {!!categoryName && (
+                <BillLine label="Category">
+                  <Text className="text-xs text-gray-900">{categoryName}</Text>
+                </BillLine>
+              )}
+              {tx.type === 'expense' && (
+                <BillLine label="Payment account">
+                  <Text className="text-xs text-gray-900">{accountLabel}</Text>
+                </BillLine>
+              )}
+
+              {tx.items.length > 0 && (
+                <>
+                  <View className="flex-row border-t border-gray-300 bg-gray-50">
+                    <BillCell head align="center" width={BILL_COL.sn}>
+                      S.N.
+                    </BillCell>
+                    <BillCell head>Item</BillCell>
+                    <BillCell head align="right" width={BILL_COL.qty}>
+                      Qty
+                    </BillCell>
+                    <BillCell head align="right" width={BILL_COL.rate}>
+                      Rate
+                    </BillCell>
+                    <BillCell head ruled={false} align="right" width={BILL_COL.amount}>
+                      Amount
+                    </BillCell>
+                  </View>
+                  {tx.items.map((item, idx) => (
+                    <View key={idx} className="flex-row border-t border-gray-200">
+                      <BillCell align="center" width={BILL_COL.sn} textClass="text-gray-500">
+                        {idx + 1}
+                      </BillCell>
+                      <BillCell textClass="text-gray-900">{item.description}</BillCell>
+                      <BillCell align="right" width={BILL_COL.qty}>
+                        {item.qty}
+                      </BillCell>
+                      <BillCell align="right" width={BILL_COL.rate}>
+                        {item.rate.toLocaleString()}
+                      </BillCell>
+                      <BillCell ruled={false} align="right" width={BILL_COL.amount} textClass="font-semibold text-gray-900">
+                        {item.amount.toLocaleString()}
+                      </BillCell>
+                    </View>
+                  ))}
+                </>
+              )}
+
+              {showSubtotal && <BillTotal label="Sub-total" value={subtotal.toLocaleString()} />}
+              {tx.discount_amount > 0 && <BillTotal label="Discount" value={`− ${tx.discount_amount.toLocaleString()}`} />}
+              {tx.vat_amount > 0 && <BillTotal label="VAT" value={`+ ${tx.vat_amount.toLocaleString()}`} />}
+              <BillTotal label="Total (NPR)" value={tx.amount.toLocaleString()} tint={meta.bg} color={meta.color} strong />
+
+              {!!tx.note && (
+                <BillLine label="Remarks">
+                  <Text className="text-xs text-gray-700">{tx.note}</Text>
+                </BillLine>
+              )}
             </View>
 
-            <Text className="mb-4 text-2xl font-extrabold" style={{ color: meta.color }}>
-              NPR {tx.amount.toLocaleString()}
-            </Text>
-
-            {isBill && !!tx.bill_no && (
-              <View className="mb-2 flex-row justify-between">
-                <Text className="text-xs text-gray-400">Bill No.</Text>
-                <Text className="text-xs font-medium text-gray-900">{tx.bill_no}</Text>
-              </View>
-            )}
-            {!!tx.bill_date && (
-              <View className="mb-2 flex-row justify-between">
-                <Text className="text-xs text-gray-400">Date</Text>
-                <View className="items-end">
-                  <Text className="text-xs font-bold text-gray-900">{toBsLabel(tx.bill_date)}</Text>
-                  <Text className="text-[10px] text-gray-400">{new Date(tx.bill_date).toLocaleDateString()}</Text>
-                </View>
-              </View>
-            )}
-            {!!tx.party_name && (
-              <View className="mb-2 flex-row justify-between">
-                <Text className="text-xs text-gray-400">{tx.type === 'purchase' ? 'Vendor' : tx.type === 'expense' ? 'Paid to' : 'Party'}</Text>
-                <Text className="text-xs font-medium text-gray-900">{tx.party_name}</Text>
-              </View>
-            )}
-            {!!tx.party_address && (
-              <View className="mb-2 flex-row justify-between">
-                <Text className="text-xs text-gray-400">Address</Text>
-                <Text className="flex-1 text-right text-xs font-medium text-gray-900">{tx.party_address}</Text>
-              </View>
-            )}
-            {!!tx.vat_pan_no && (
-              <View className="mb-2 flex-row justify-between">
-                <Text className="text-xs text-gray-400">VAT/PAN</Text>
-                <Text className="text-xs font-medium text-gray-900">{tx.vat_pan_no}</Text>
-              </View>
-            )}
-            {!!categoryName && (
-              <View className="mb-2 flex-row justify-between">
-                <Text className="text-xs text-gray-400">Category</Text>
-                <Text className="text-xs font-medium text-gray-900">{categoryName}</Text>
-              </View>
-            )}
-            {tx.type === 'expense' && (
-              <View className="mb-3 flex-row justify-between">
-                <Text className="text-xs text-gray-400">Payment account</Text>
-                <Text className="text-xs font-medium text-gray-900">{accountLabel}</Text>
-              </View>
-            )}
-
-            {tx.items.length > 0 && (
-              <View className="mb-3 rounded-xl border border-gray-100 bg-gray-50 p-3">
-                <Text className="mb-2 text-xs font-semibold text-gray-500">Items</Text>
-                {tx.items.map((item, idx) => (
-                  <View key={idx} className="mb-1.5 flex-row items-center justify-between">
-                    <Text className="flex-1 pr-2 text-xs text-gray-700" numberOfLines={2}>
-                      {item.description} × {item.qty}
-                    </Text>
-                    <Text className="text-xs font-semibold text-gray-900">NPR {item.amount.toLocaleString()}</Text>
-                  </View>
-                ))}
-                {(tx.discount_amount > 0 || tx.vat_amount > 0) && (
-                  <View className="mt-2 border-t border-gray-200 pt-2">
-                    {tx.discount_amount > 0 && (
-                      <View className="mb-1 flex-row justify-between">
-                        <Text className="text-xs text-gray-400">Discount</Text>
-                        <Text className="text-xs text-gray-700">− NPR {tx.discount_amount.toLocaleString()}</Text>
-                      </View>
-                    )}
-                    {tx.vat_amount > 0 && (
-                      <View className="flex-row justify-between">
-                        <Text className="text-xs text-gray-400">VAT</Text>
-                        <Text className="text-xs text-gray-700">+ NPR {tx.vat_amount.toLocaleString()}</Text>
-                      </View>
-                    )}
-                  </View>
-                )}
-                <View className="mt-2 flex-row justify-between border-t border-gray-200 pt-2">
-                  <Text className="text-xs font-bold text-gray-900">Total</Text>
-                  <Text className="text-xs font-bold text-gray-900">NPR {tx.amount.toLocaleString()}</Text>
-                </View>
-              </View>
-            )}
-
-            {!!tx.note && (
-              <View className="mb-3">
-                <Text className="mb-0.5 text-xs text-gray-400">Note</Text>
-                <Text className="text-xs text-gray-700">{tx.note}</Text>
-              </View>
-            )}
-
-            <Pressable
-              onPress={onEdit}
-              className="mt-2 flex-row items-center justify-center gap-1.5 rounded-lg bg-orange-500 py-3"
-            >
-              <Ionicons name="pencil" size={14} color="white" />
-              <Text className="text-sm font-semibold text-white">Edit</Text>
-            </Pressable>
+            <View className="mt-3 flex-row" style={{ gap: 8 }}>
+              <Pressable onPress={onEdit} className="flex-1 flex-row items-center justify-center gap-1.5 rounded-lg bg-orange-500 py-3">
+                <Ionicons name="pencil" size={14} color="white" />
+                <Text className="text-sm font-semibold text-white">Edit</Text>
+              </Pressable>
+              {!!onDelete && (
+                <Pressable
+                  onPress={onDelete}
+                  className="flex-1 flex-row items-center justify-center gap-1.5 rounded-lg border bg-white py-3"
+                  style={{ borderColor: '#FECACA' }}
+                >
+                  <Ionicons name="trash-outline" size={14} color="#DC2626" />
+                  <Text className="text-sm font-semibold" style={{ color: '#DC2626' }}>
+                    Delete
+                  </Text>
+                </Pressable>
+              )}
+            </View>
           </ScrollView>
         </Pressable>
       </Pressable>
@@ -2250,7 +2452,7 @@ function dayLabel(dateStr: string): string {
 
 function LedgerRow({ item, customerName, basePath }: { item: CustomerLedgerEntry; customerName: string | null; basePath?: string }) {
   const isDebit = item.entry_type === 'debit';
-  // Money we gave the customer is red; money they paid, or still owe us, is green.
+  // Money we gave the customer (Payment Out) is red; money they paid, or that is still receivable, is green.
   const isOut = isDebit && item.source === 'manual';
   return (
     <Pressable
@@ -2262,7 +2464,7 @@ function LedgerRow({ item, customerName, basePath }: { item: CustomerLedgerEntry
       </View>
       <View className="flex-1">
         <Text className="text-sm font-semibold text-gray-900" numberOfLines={1}>
-          {isDebit ? 'Owes' : 'Paid'} · {customerName ?? 'Unknown customer'}
+          {!isDebit ? 'Received' : isOut ? 'Payment Out' : 'Receivable'} · {customerName ?? 'Unknown customer'}
         </Text>
         <Text className="text-xs text-gray-400" numberOfLines={1}>
           {item.note ?? (item.source === 'booking' ? 'From a booked job' : 'Manual entry')} ·{' '}
@@ -2288,7 +2490,7 @@ function VendorFeedRow({ item, vendorName, basePath }: { item: VendorLedgerEntry
       </View>
       <View className="flex-1">
         <Text className="text-sm font-semibold text-gray-900" numberOfLines={1}>
-          {isDebit ? 'Bought on credit' : 'You paid'} · {vendorName ?? 'Unknown vendor'}
+          {isDebit ? 'Bought on credit' : 'Payment Out'} · {vendorName ?? 'Unknown vendor'}
         </Text>
         <Text className="text-xs text-gray-400" numberOfLines={1}>
           {item.note ?? (item.source === 'booking' ? 'From a credit purchase' : 'Manual entry')} ·{' '}
@@ -2342,6 +2544,7 @@ function TransferFeedRow({
 }
 
 export function TransactionsScreen({ basePath }: { basePath?: string }) {
+  const desktopWeb = useIsWideWeb();
   // voice* params arrive from Sagar AI Assistant (see FloatingAssistantChat)
   // - a spoken or typed command gets routed here the same way a Shortcuts
   // tap does (?type=...&add=1), just with these extra fields for
@@ -2349,6 +2552,8 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
   const {
     type: typeParam,
     add: addParam,
+    edit: editParam,
+    partyId: partyIdParam,
     voiceAmount,
     voiceParty,
     voiceDate,
@@ -2356,6 +2561,8 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
   } = useLocalSearchParams<{
     type?: string;
     add?: string;
+    edit?: string;
+    partyId?: string;
     voiceAmount?: string;
     voiceParty?: string;
     voiceDate?: string;
@@ -2449,11 +2656,19 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
   // are only ever added from Shortcuts.
   const isAddFlow = addParam === '1';
   const [filter, setFilter] = useState<'all' | BusinessTransactionType>(initialFilter);
-  const [showForm, setShowForm] = useState(isAddFlow);
+  const [showFormState, setShowForm] = useState(isAddFlow);
   // Bumped after each save in the web quick-add flow so the form remounts
   // empty (see onDone below) instead of closing to the history list.
   const [formKey, setFormKey] = useState(0);
-  const [editingTx, setEditingTx] = useState<BusinessTransaction | null>(null);
+  const [editingTxState, setEditingTx] = useState<BusinessTransaction | null>(null);
+  // An edit link (?edit=<id>) - from the Statement, the Day Book or a customer's
+  // page - lands on this same page as "New", with that bill loaded into the form.
+  // It is read straight from the link, so it needs no effect to open: the form
+  // shows as soon as the bill has loaded, and is gone when the link is.
+  const { data: editRow } = useSupabaseRow('business_transactions', editParam);
+  const editLinkTx = editParam && editRow && editRow.id === editParam ? editRow : null;
+  const editingTx = editLinkTx ?? editingTxState;
+  const showForm = showFormState || !!editLinkTx;
   const [viewingTx, setViewingTx] = useState<BusinessTransaction | null>(null);
   // The form renders inside the list's own header, so opening it while
   // scrolled down through history (which is exactly when someone taps Edit
@@ -2493,7 +2708,26 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
   // stranding the reseller on a dead end they'd have to back out of anyway.
   // Editing an existing row (tapped from the list) is a different flow and
   // should just close back to that list.
-  const isQuickAddFlow = isLockedToType && isAddFlow && !editingTx;
+  const inAddFlow = isLockedToType && isAddFlow;
+  const isQuickAddFlow = inAddFlow && !editingTx;
+
+  // Edit a bill: from the entry page itself (its Recent list) load it right here;
+  // from anywhere else go to that same entry page with the bill loaded - so Edit
+  // is the very page "New" is, never a different layout.
+  function editBill(tx: BusinessTransaction | null) {
+    if (!tx) return;
+    if (inAddFlow) openForm(tx);
+    else router.push(`${basePath}/transactions?type=${tx.type}&add=1&edit=${tx.id}` as any);
+  }
+
+  // Done with, or backed out of, an edit that was opened by a link: back to
+  // wherever it was opened from (or the list, if the page was opened directly).
+  function leaveEdit() {
+    const type = editingTx?.type;
+    setEditingTx(null);
+    if (router.canGoBack()) router.back();
+    else router.replace(`${basePath}/transactions${type ? `?type=${type}` : ''}` as any);
+  }
 
   // Pressing the Android hardware back button while editing an existing
   // entry should close the form and stay on the list; during the locked
@@ -2505,7 +2739,7 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
         setViewingTx(null);
         return true;
       }
-      if (showForm && !isQuickAddFlow) {
+      if (showForm && !isQuickAddFlow && !editLinkTx) {
         setShowForm(false);
         setEditingTx(null);
         return true;
@@ -2513,7 +2747,7 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
       return false;
     });
     return () => sub.remove();
-  }, [showForm, isQuickAddFlow, viewingTx]);
+  }, [showForm, isQuickAddFlow, viewingTx, editLinkTx]);
 
   // "All" is a full daily feed across every money-moving table (general
   // sales/purchase/expense entries plus per-customer debit/credit entries),
@@ -2585,13 +2819,44 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
   // On web the open form already lists recent entries down its right side,
   // so repeating the whole history underneath it showed the same statement
   // twice - see RecentEntriesCard.
-  const hideFeed = showForm && Platform.OS === 'web';
+  const hideFeed = showForm && desktopWeb;
 
   function handleDelete(tx: BusinessTransaction) {
     showAlert('Delete this transaction?', undefined, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => deleteTx.mutate(tx.id) },
     ]);
+  }
+
+  // Delete from the receipt (opened from the list or the Recent entries beside
+  // the form): names the entry so the right one is being removed, and if it is
+  // the one loaded in the form, the form goes back to blank instead of keeping
+  // a bill that no longer exists.
+  function handleDeleteFromReceipt(tx: BusinessTransaction) {
+    setViewingTx(null);
+    const label = TYPE_META[tx.type].label.toLowerCase();
+    showAlert(
+      `Delete this ${label}?`,
+      `${tx.party_name || 'Unnamed'} · NPR ${tx.amount.toLocaleString()}${tx.customer_id ? '. It is also taken off their ledger.' : ''}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteTx.mutateAsync(tx.id);
+              if (editingTx?.id === tx.id) {
+                setEditingTx(null);
+                setFormKey((k) => k + 1);
+              }
+            } catch (err) {
+              showAlert('Could not delete', getErrorMessage(err));
+            }
+          },
+        },
+      ]
+    );
   }
 
   // Web: the list view is a Day Book style cash-book table (the entry form
@@ -2627,8 +2892,9 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
           onClose={() => setViewingTx(null)}
           onEdit={() => {
             setViewingTx(null);
-            openForm(viewingTx);
+            editBill(viewingTx);
           }}
+          onDelete={viewingTx ? () => handleDeleteFromReceipt(viewingTx) : undefined}
         />
       </>
     );
@@ -2645,13 +2911,15 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
         ListHeaderComponent={
           <>
             {/* On web the top bar already carries the name. */}
-            {Platform.OS !== 'web' && (
+            {!desktopWeb && (
             <View className="mb-3 flex-row items-center justify-between">
               {isLockedToType ? (
                 <View className="flex-row items-center gap-2">
                   <Pressable
                     onPress={() => {
-                      if (showForm && !isQuickAddFlow) {
+                      if (editLinkTx) {
+                        leaveEdit();
+                      } else if (showForm && !isQuickAddFlow) {
                         setShowForm(false);
                         setEditingTx(null);
                       } else {
@@ -2697,7 +2965,7 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
             </View>
             )}
 
-            {!(showForm && isQuickAddFlow) && (
+            {!(showForm && (inAddFlow || desktopWeb)) && (
               <TrendChartCard key={filter} transactions={transactions ?? []} metrics={[filter]} />
             )}
 
@@ -2711,12 +2979,21 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
                 customers={customers ?? []}
                 products={products ?? []}
                 voicePrefill={editingTx || formKey > 0 ? null : voicePrefill}
+                presetPartyId={editingTx || formKey > 0 ? undefined : partyIdParam}
+                onOpenRecent={desktopWeb ? setViewingTx : undefined}
                 onDone={() => {
+                  if (editLinkTx) {
+                    leaveEdit();
+                    return;
+                  }
                   // Entering several bills in a row is the whole point of
                   // the web entry screen: stay on it with a blank form and a
                   // quick confirmation, rather than dropping back to history.
-                  if (Platform.OS === 'web' && isQuickAddFlow) {
-                    showAlert(`${TYPE_META[initialFilter].label} saved`, 'The form is ready for the next entry.');
+                  // An entry fixed from the Recent list (editingTx) is the
+                  // same: back to the blank form, not out to the history.
+                  if (desktopWeb && inAddFlow) {
+                    showAlert(`${TYPE_META[initialFilter].label} ${editingTx ? 'updated' : 'saved'}`, 'The form is ready for the next entry.');
+                    setEditingTx(null);
                     setFormKey((k) => k + 1);
                     setTimeout(() => listRef.current?.scrollToPosition(0, 0, true), 0);
                     return;
@@ -2726,6 +3003,17 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
                   if (isQuickAddFlow) router.back();
                 }}
                 onCancel={() => {
+                  if (editLinkTx) {
+                    leaveEdit();
+                    return;
+                  }
+                  // Backing out of an edit started from the Recent list returns
+                  // to the blank entry form; only a blank form leaves the screen.
+                  if (desktopWeb && inAddFlow && editingTx) {
+                    setEditingTx(null);
+                    setFormKey((k) => k + 1);
+                    return;
+                  }
                   setShowForm(false);
                   setEditingTx(null);
                   if (isQuickAddFlow) router.back();
@@ -2781,8 +3069,9 @@ export function TransactionsScreen({ basePath }: { basePath?: string }) {
         onClose={() => setViewingTx(null)}
         onEdit={() => {
           setViewingTx(null);
-          openForm(viewingTx);
+          editBill(viewingTx);
         }}
+        onDelete={viewingTx ? () => handleDeleteFromReceipt(viewingTx) : undefined}
       />
     </View>
   );

@@ -1,5 +1,5 @@
 // lib/components/finance/ImportStatementScreen.tsx
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { View, Text, TextInput, Pressable, FlatList } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useBarActions, useBookLayout } from './BookKit';
@@ -7,7 +7,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../hooks/useAuth';
 import { useSupabaseQuery } from '../../hooks/useSupabase';
-import { useStatementImport, type ReviewRow } from '../../hooks/useStatementImport';
+import { useStatementImport, usePendingStatementRows, type ReviewRow } from '../../hooks/useStatementImport';
 import { showAlert } from '../../utils/alert';
 import { DEBIT_TYPES, CREDIT_TYPES, type StatementAction } from '../../utils/parseStatement';
 import type { Customer } from '../../../types/database.types';
@@ -47,6 +47,15 @@ export function ImportStatementScreen() {
   const [rows, setRows] = useState<ReviewRow[] | null>(null);
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
 
+  // A file attached in the Sagar chat arrives already parsed.
+  const pendingRows = usePendingStatementRows((state) => state.rows);
+  useEffect(() => {
+    if (!pendingRows) return;
+    setRows(pendingRows);
+    setOpenMenu(null);
+    usePendingStatementRows.getState().clear();
+  }, [pendingRows]);
+
   async function handlePick() {
     setOpenMenu(null);
     const parsed = await pickAndParse();
@@ -70,7 +79,7 @@ export function ImportStatementScreen() {
       (r) => r.selected && (r.type === 'payment_in' || r.type === 'payment_out') && !r.party.trim()
     );
     if (missingParty) {
-      showAlert('Add a name', 'Every checked Payment In/Out row needs a customer or vendor name before it can be imported.');
+      showAlert('Add a name', 'Every checked Received / Payment Out row needs a customer or vendor name before it can be imported.');
       return;
     }
     const { imported, failed } = await importSelected(rows, customers ?? []);
@@ -204,7 +213,7 @@ export function ImportStatementScreen() {
                       <TextInput
                         value={item.description}
                         onChangeText={(v) => updateRow(index, { description: v })}
-                        placeholder="Remark"
+                        placeholder="Remarks"
                         placeholderTextColor="#9CA3AF"
                         multiline
                         className="mt-1 text-xs text-gray-500"

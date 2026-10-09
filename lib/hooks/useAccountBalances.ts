@@ -39,22 +39,32 @@ export function useAccountBalances(userId: string | undefined) {
   const { accounts } = useBankAccounts(userId);
   const { data: transactions } = useSupabaseQuery('business_transactions', {
     filters: userId ? { owner_id: userId } : {},
+    // Every row, not the API's first 1000 - a balance is a sum of all of them.
+    all: true,
     enabled: !!userId,
   });
   const { data: customerEntries } = useSupabaseQuery('customer_ledger_entries', {
     filters: userId ? { owner_id: userId } : {},
+    // Every row, not the API's first 1000 - a balance is a sum of all of them.
+    all: true,
     enabled: !!userId,
   });
   const { data: vendorEntries } = useSupabaseQuery('vendor_ledger_entries', {
     filters: userId ? { owner_id: userId } : {},
+    // Every row, not the API's first 1000 - a balance is a sum of all of them.
+    all: true,
     enabled: !!userId,
   });
   const { data: customers } = useSupabaseQuery('customers', {
     filters: userId ? { owner_id: userId } : {},
+    // Every row, not the API's first 1000 - a balance is a sum of all of them.
+    all: true,
     enabled: !!userId,
   });
   const { data: transfers } = useSupabaseQuery('account_transfers', {
     filters: userId ? { owner_id: userId } : {},
+    // Every row, not the API's first 1000 - a balance is a sum of all of them.
+    all: true,
     enabled: !!userId,
   });
 
@@ -111,7 +121,7 @@ export function useAccountBalances(userId: string | undefined) {
         add(e.bank_account_id, e.amount, {
           id: e.id,
           date: e.entry_date ?? e.created_at,
-          label: `Payment in · ${name}`,
+          label: `Received · ${name}`,
           sub: e.note ?? '',
           isInflow: true,
           nav: { kind: 'party', partyId: e.customer_id },
@@ -120,7 +130,7 @@ export function useAccountBalances(userId: string | undefined) {
         add(e.bank_account_id, -e.amount, {
           id: e.id,
           date: e.entry_date ?? e.created_at,
-          label: `Payment out · ${name}`,
+          label: `Payment Out · ${name}`,
           sub: e.note ?? '',
           isInflow: false,
           nav: { kind: 'party', partyId: e.customer_id },
@@ -133,7 +143,7 @@ export function useAccountBalances(userId: string | undefined) {
         add(e.bank_account_id, -e.amount, {
           id: e.id,
           date: e.entry_date ?? e.created_at,
-          label: `Paid vendor · ${name}`,
+          label: `Payment Out · ${name}`,
           sub: e.note ?? '',
           isInflow: false,
           nav: { kind: 'party', partyId: e.vendor_id },
@@ -176,6 +186,8 @@ export function useAccountBalances(userId: string | undefined) {
       activity: activity[acc.id] ?? [],
     }));
     const total = cash + perAccount.reduce((sum, a) => sum + a.balance, 0);
-    return { cash, cashActivity: activity.cash, perAccount, total };
+    // False until every list has arrived, so a screen can wait rather than show zeros.
+    const ready = !!transactions && !!customerEntries && !!vendorEntries && !!transfers && !!customers;
+    return { cash, cashActivity: activity.cash, perAccount, total, ready };
   }, [transactions, customerEntries, vendorEntries, customers, transfers, accounts]);
 }

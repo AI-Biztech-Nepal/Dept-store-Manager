@@ -82,8 +82,19 @@ export interface Customer {
   latitude: number | null;
   longitude: number | null;
   phone_contact_id: string | null;
+  /** What kind of party this is (see party_types); null = not set. */
+  party_type_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** A label the store sorts its parties by - Customer, Vendor, Employee or
+ * any they add themselves (0003_party_types.sql). */
+export interface PartyType {
+  id: string;
+  owner_id: string;
+  name: string;
+  created_at: string;
 }
 
 export type LedgerEntryType = 'debit' | 'credit';
@@ -197,6 +208,7 @@ export interface Database {
       profiles: { Row: Profile; Insert: Partial<Profile>; Update: Partial<Profile>; Relationships: [] };
       products: { Row: Product; Insert: Partial<Product>; Update: Partial<Product>; Relationships: [] };
       customers: { Row: Customer; Insert: Partial<Customer>; Update: Partial<Customer>; Relationships: [] };
+      party_types: { Row: PartyType; Insert: Partial<PartyType>; Update: Partial<PartyType>; Relationships: [] };
       finance_items: { Row: FinanceItem; Insert: Partial<FinanceItem>; Update: Partial<FinanceItem>; Relationships: [] };
       account_transfers: {
         Row: AccountTransfer;

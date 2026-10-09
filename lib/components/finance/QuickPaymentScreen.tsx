@@ -1,6 +1,7 @@
 // lib/components/finance/QuickPaymentScreen.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TextInput, Pressable, ScrollView, Platform } from 'react-native';
+import { View, Text, TextInput, Pressable, ScrollView } from 'react-native';
+import { useIsWideWeb } from '../../hooks/useWideGrid';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,6 +19,7 @@ import { PaymentEntryTable, type PaymentEntryTableHandle, type PaymentRow } from
 import { KeyboardDateInput } from './KeyboardDateInput';
 import { KeyboardSelect } from './KeyboardSelect';
 import { useConfirmSave } from './ConfirmSave';
+import { useAvailableAmounts, optionLabel } from '../../hooks/useAvailableAmounts';
 import { FINANCE_ENTRY_ACCENT, FINANCE_ENTRY_SHADOW } from './entryTheme';
 import { MONEY } from './moneyColors';
 import { readKey } from '../../utils/webKeys';
@@ -48,6 +50,9 @@ export function QuickPaymentScreen() {
 }
 
 function QuickPaymentForm() {
+  // The keyboard-driven desk layout is for a wide web screen; a phone (or a
+  // phone browser) gets the same touch form the native app does.
+  const desktopWeb = useIsWideWeb();
   // voice* params arrive from the Finance dashboard's voice-command button,
   // routed here the same way a Shortcuts tap is (?type=in/out) - applied
   // once on mount below, same "review before save" rule as Scan Bill.
@@ -89,6 +94,8 @@ function QuickPaymentForm() {
   const createCustomer = useSupabaseInsert('customers');
   const updateCustomer = useSupabaseUpdate('customers');
   const bankAccounts = useBankAccounts(userId);
+  // Money in each place, shown in the Payment method dropdown - only when paying out.
+  const available = useAvailableAmounts(isOut ? userId : undefined);
   const phoneContacts = usePhoneContacts();
   const { scanning, pickAndScan } = useScanBill();
   const { confirm: confirmSave, dialog: confirmDialog } = useConfirmSave();
@@ -197,7 +204,7 @@ function QuickPaymentForm() {
       return;
     }
     const ok = await confirmSave({
-      title: isOut ? 'Save this payment out?' : 'Save this payment?',
+      title: `Save this ${isOut ? 'Payment Out' : 'Received'} entry?`,
       rows: [
         { label: payTarget === 'vendor' ? 'Vendor' : 'Customer', value: trimmedName },
         ...(receiptNo.trim() ? [{ label: isOut ? 'Payment no.' : 'Receipt no.', value: receiptNo.trim() }] : []),
@@ -224,7 +231,7 @@ function QuickPaymentForm() {
         receipt_no: receiptNo.trim() || null,
       } as any);
       showAlert(
-        isOut ? 'Payment out recorded' : 'Payment in recorded',
+        isOut ? 'Payment Out saved' : 'Received saved',
         `NPR ${value.toLocaleString()} for ${customer.name}.`
       );
       setAmount('');
@@ -390,7 +397,7 @@ function QuickPaymentForm() {
     }
     const sum = validRows.reduce((s, r) => s + Number(r.amount), 0);
     const ok = await confirmSave({
-      title: `Save ${validRows.length === 1 ? 'this' : `these ${validRows.length}`} ${isOut ? 'payment out' : 'receipt'}${validRows.length === 1 ? '' : 's'}?`,
+      title: `Save ${validRows.length === 1 ? 'this' : `these ${validRows.length}`} ${isOut ? 'Payment Out' : 'Received'} ${validRows.length === 1 ? 'entry' : 'entries'}?`,
       rows: [
         ...validRows.slice(0, 5).map((r) => ({ label: r.customerName.trim(), value: `NPR ${Number(r.amount).toLocaleString()}` })),
         ...(validRows.length > 5 ? [{ label: `+ ${validRows.length - 5} more` }] : []),
@@ -437,7 +444,7 @@ function QuickPaymentForm() {
         });
       }
       showAlert(
-        isOut ? 'Payments out recorded' : 'Payments in recorded',
+        isOut ? 'Payment Out saved' : 'Received saved',
         `${validRows.length} ${validRows.length === 1 ? 'entry' : 'entries'} saved, NPR ${validRows
           .reduce((sum, r) => sum + Number(r.amount), 0)
           .toLocaleString()} total.`
@@ -573,6 +580,7 @@ function QuickPaymentForm() {
         onClose={() => setShowAccountPicker(false)}
         onRename={bankAccounts.rename}
         onDelete={bankAccounts.remove}
+        available={available}
       />
     </>
   );
@@ -582,7 +590,7 @@ function QuickPaymentForm() {
   const scanRowRef = useRef<() => void>(() => {});
   scanRowRef.current = handleScanForRow;
   useScreenHeader(
-    Platform.OS === 'web'
+    desktopWeb
       ? {
           title: meta.label,
           resetTitle: 'Quick Payment',
@@ -602,7 +610,7 @@ function QuickPaymentForm() {
     [meta.label, scanning]
   );
 
-  if (Platform.OS === 'web') {
+  if (desktopWeb) {
     const accent = FINANCE_ENTRY_ACCENT;
     return (
       <ScrollView className="flex-1 bg-gray-50" contentContainerStyle={{ paddingBottom: 60 }} keyboardShouldPersistTaps="handled">
@@ -664,7 +672,7 @@ function QuickPaymentForm() {
                       value={bankAccountId ?? '__cash__'}
                       options={[
                         { value: '__cash__', label: 'Cash' },
-                        ...bankAccounts.accounts.map((a) => ({ value: a.id, label: a.name })),
+                        ...bankAccounts.accounts.map((a) => ({ value: a.id, label: optionLabel(a.name, available?.byId[a.id]) })),
                       ]}
                       onChange={(v) => setBankAccountId(v === '__cash__' ? null : v)}
                       selectRef={(el) => {
@@ -687,7 +695,7 @@ function QuickPaymentForm() {
                 accent={accent}
                 partyLabel={payTarget === 'vendor' ? 'Vendor' : 'Customer'}
                 addLabel={`Add ${payTarget === 'vendor' ? 'vendor' : 'person'}`}
-                totalLabel={isOut ? 'Total paid out' : 'Total received'}
+                totalLabel={isOut ? 'Total Payment Out' : 'Total Received'}
                 totalColor={meta.color}
                 onUpdateRow={updateRow}
                 onAddRow={addRow}
@@ -721,7 +729,7 @@ function QuickPaymentForm() {
             <View style={{ width: 320 }}>
               <View className="rounded-2xl border border-gray-200 bg-white p-4">
                 <Text className="mb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400">
-                  Recent {isOut ? 'payments out' : 'received'}
+                  Recent {isOut ? 'Payment Out' : 'Received'}
                 </Text>
                 {recentEntries.length === 0 ? (
                   <Text className="text-xs text-gray-400">No entries yet.</Text>
@@ -817,7 +825,7 @@ function QuickPaymentForm() {
           </View>
 
           <Text className="mb-1 text-xs font-medium text-gray-500">
-            {isOut ? 'Amount paid out (NPR)' : 'Amount received (NPR)'}
+            Amount (NPR)
           </Text>
           <TextInput
             value={amount}
@@ -828,7 +836,7 @@ function QuickPaymentForm() {
             className="mb-3 rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900"
           />
 
-          <Text className="mb-1 text-xs font-medium text-gray-500">Note (optional)</Text>
+          <Text className="mb-1 text-xs font-medium text-gray-500">Remarks (optional)</Text>
           <TextInput
             value={note}
             onChangeText={setNote}
@@ -847,7 +855,7 @@ function QuickPaymentForm() {
           style={{ backgroundColor: meta.color }}
         >
           <Text className="text-base font-semibold text-white">
-            {saving ? 'Saving…' : isOut ? 'Record payment out' : 'Record payment in'}
+            {saving ? 'Saving…' : isOut ? 'Save Payment Out' : 'Save Received'}
           </Text>
         </Pressable>
       </View>

@@ -1,20 +1,17 @@
 // lib/components/finance/TotalsReportScreen.tsx
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { View, Text } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../hooks/useAuth';
 import { useSupabaseQuery } from '../../hooks/useSupabase';
 import { isSettledOnTheSpot } from '../../hooks/useAccountBalances';
-import { BS_MONTHS, adStringToBs, toBsDayChartLabel, toBsMonthChartLabel } from '../../utils/nepaliDate';
-import { BarChart } from '../BarChart';
+import { BS_MONTHS, adStringToBs } from '../../utils/nepaliDate';
 import { MONEY } from './moneyColors';
-import { BackButton, BookPage, BookStat, BookStats, BookTable, FilterTabs, Pill, money, useBookLayout, useBookToolbar, type BookColumn } from './BookKit';
+import { BackButton, BookPage, BookStat, BookStats, BookTable, Pill, money, useBookLayout, useBookToolbar, type BookColumn } from './BookKit';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-type Kind = 'received' | 'paid';
-type Granularity = 'week' | 'month';
+/** Total Received / Total Paid are money that actually moved; Sales / Purchase / Expense are the bills themselves, paid or not. */
+type Kind = 'received' | 'paid' | 'sale' | 'purchase' | 'expense';
 
 type NavTarget = { kind: 'transactions'; type: 'expense' | 'sale' | 'purchase' } | { kind: 'party'; partyId: string };
 
@@ -28,10 +25,10 @@ const PILL = {
   sale: { label: 'Sale', color: MONEY.in.text, bg: MONEY.in.bg },
   purchase: { label: 'Purchase', color: MONEY.out.text, bg: MONEY.out.bg },
   expense: { label: 'Expense', color: MONEY.out.text, bg: MONEY.out.bg },
-  paymentReceived: { label: 'Payment received', color: MONEY.in.text, bg: MONEY.in.bg },
+  paymentReceived: { label: 'Received', color: MONEY.in.text, bg: MONEY.in.bg },
   jobPayment: { label: 'Job payment', color: MONEY.in.text, bg: MONEY.in.bg },
-  paymentOut: { label: 'Payment out', color: MONEY.out.text, bg: MONEY.out.bg },
-  paidVendor: { label: 'Paid vendor', color: MONEY.out.text, bg: MONEY.out.bg },
+  paymentOut: { label: 'Payment Out', color: MONEY.out.text, bg: MONEY.out.bg },
+  paidVendor: { label: 'Payment Out', color: MONEY.out.text, bg: MONEY.out.bg },
 } satisfies Record<string, PillStyle>;
 
 interface Entry {
@@ -45,24 +42,13 @@ interface Entry {
   nav: NavTarget;
 }
 
-const GRANULARITIES: { key: Granularity; label: string }[] = [
-  { key: 'week', label: 'Week' },
-  { key: 'month', label: 'Month' },
-];
-
 const KIND_META: Record<Kind, { title: string; subtitle: string; color: string }> = {
   received: { title: 'Total Received', subtitle: 'Money actually collected, newest first', color: '#059669' },
   paid: { title: 'Total Paid', subtitle: 'Money that actually left the business, newest first', color: '#DC2626' },
+  sale: { title: 'Sales Report', subtitle: 'Every sale bill, newest first', color: '#059669' },
+  purchase: { title: 'Purchase Report', subtitle: 'Every purchase bill, newest first', color: '#DC2626' },
+  expense: { title: 'Expense Report', subtitle: 'Every expense you recorded, newest first', color: '#DC2626' },
 };
-
-function startOfDay(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-function startOfWeek(d: Date) {
-  const day = startOfDay(d);
-  const dow = day.getDay() === 0 ? 7 : day.getDay(); // Monday = 1 ... Sunday = 7
-  return new Date(day.getTime() - (dow - 1) * DAY_MS);
-}
 
 /** "Aswin 2083 BS" - the table's month rows. Dates are stored as AD strings
  * ('YYYY-MM-DD' or a full timestamp); Nepal reads them in Bikram Sambat. */
@@ -111,17 +97,14 @@ export function TotalsReportScreen({ kind, basePath }: { kind: Kind; basePath: s
     return map;
   }, [categories]);
 
-  const [granularity, setGranularity] = useState<Granularity>('month');
   const year = new Date().getFullYear();
 
-  // The Week / Month switch (for the chart) sits in the top bar on a wide screen.
   const toolbar = useBookToolbar(
     {
       wide: layout.wide,
       left: layout.wide ? undefined : () => <BackButton onPress={() => router.back()} />,
-      right: () => <FilterTabs options={GRANULARITIES} value={granularity} onChange={setGranularity} />,
     },
-    [granularity]
+    []
   );
 
   // "Received" = every payment actually collected from a customer, whether
@@ -133,6 +116,30 @@ export function TotalsReportScreen({ kind, basePath }: { kind: Kind; basePath: s
   // are excluded since those represent money owed, not money that's left
   // the business yet.
   const entries = useMemo((): Entry[] => {
+    // A Sales / Purchase / Expense report is just that kind of bill - every one, whether or not the
+    // money has moved yet - so none of the cash rules below apply to it.
+    if (kind === 'sale' || kind === 'purchase' || kind === 'expense') {
+      return (transactions ?? [])
+        .filter((t) => t.type === kind)
+        .map((t): Entry => {
+          // The expense report shows the category (same one picked in the entry portal) in
+          // place of the generic "Expense" type - the title still falls back to it when there's no party.
+          const category = t.expense_category_id ? categoryById.get(t.expense_category_id) : undefined;
+          return {
+            id: t.id,
+            date: t.bill_date ?? t.created_at,
+            amount: t.amount,
+            party: t.party_name ?? '',
+            note:
+              kind === 'expense'
+                ? t.note ?? ''
+                : [t.bill_no ? `Bill #${t.bill_no}` : null, t.note].filter(Boolean).join(' · '),
+            type: kind === 'expense' ? { label: category ?? 'Uncategorized', color: MONEY.out.text, bg: MONEY.out.bg } : PILL[kind],
+            nav: { kind: 'transactions', type: kind },
+          };
+        })
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }
     const list: Entry[] = [];
     for (const t of transactions ?? []) {
       // A Sale/Purchase with no party has no ledger to settle it later (a
@@ -222,37 +229,6 @@ export function TotalsReportScreen({ kind, basePath }: { kind: Kind; basePath: s
     return { total, thisMonth, largest };
   }, [yearEntries]);
 
-  const chartData = useMemo(() => {
-    const now = new Date();
-    if (granularity === 'week') {
-      const thisWeekStart = startOfWeek(now);
-      const weeks = Array.from({ length: 12 }, (_, i) => new Date(thisWeekStart.getTime() - (11 - i) * 7 * DAY_MS));
-      return weeks.map((weekStart) => {
-        const start = weekStart.getTime();
-        const end = start + 7 * DAY_MS;
-        const value = entries
-          .filter((e) => {
-            const t = new Date(e.date).getTime();
-            return t >= start && t < end;
-          })
-          .reduce((sum, e) => sum + e.amount, 0);
-        return { label: toBsDayChartLabel(weekStart), value };
-      });
-    }
-    // month: Jan-Dec of the current year
-    return Array.from({ length: 12 }, (_, month) => {
-      const start = new Date(year, month, 1).getTime();
-      const end = new Date(year, month + 1, 1).getTime();
-      const value = entries
-        .filter((e) => {
-          const t = new Date(e.date).getTime();
-          return t >= start && t < end;
-        })
-        .reduce((sum, e) => sum + e.amount, 0);
-      return { label: toBsMonthChartLabel(start), value };
-    });
-  }, [entries, granularity, year]);
-
   const open = (e: Entry) =>
     router.push(
       (e.nav.kind === 'transactions' ? `${basePath}/transactions?type=${e.nav.type}` : `${basePath}/customer/${e.nav.partyId}`) as never
@@ -283,7 +259,7 @@ export function TotalsReportScreen({ kind, basePath }: { kind: Kind; basePath: s
     ? [
         { key: 'date', label: 'Date', width: 104, render: (e) => <Text className="text-[12.5px] text-gray-500">{bsShortDate(e.date)}</Text> },
         { key: 'details', label: 'Details', render: (e) => detailsCell(e, false) },
-        { key: 'type', label: 'Type', width: 150, render: (e) => <Pill text={e.type.label} color={e.type.color} bg={e.type.bg} /> },
+        { key: 'type', label: kind === 'expense' ? 'Category' : 'Type', width: 150, render: (e) => <Pill text={e.type.label} color={e.type.color} bg={e.type.bg} /> },
         { key: 'amount', label: 'Amount', width: 130, align: 'right', render: amountCell },
         { key: 'act', label: '', width: 34, align: 'right', render: chevron },
       ]
@@ -303,18 +279,6 @@ export function TotalsReportScreen({ kind, basePath }: { kind: Kind; basePath: s
         <BookStat label="Entries" value={String(yearEntries.length)} color="#374151" />
         <BookStat label="Largest" value={`NPR ${money(stats.largest)}`} color="#374151" />
       </BookStats>
-
-      <View className="rounded-xl border border-gray-300 bg-white p-4">
-        <Text className="mb-3 text-xs text-gray-400">{granularity === 'week' ? 'Last 12 weeks' : `${year}, by month`}</Text>
-        <BarChart
-          data={chartData}
-          color={meta.color}
-          selectedColor={meta.color}
-          height={layout.wide ? 140 : 110}
-          formatValue={(v) => `NPR ${Math.round(v).toLocaleString()}`}
-          formatLabel={(label, i) => (granularity === 'week' ? (i % 3 === 0 ? label : null) : layout.wide || i % 2 === 0 ? label : null)}
-        />
-      </View>
 
       {yearEntries.length === 0 ? (
         <View className="items-center rounded-xl border border-gray-300 bg-white py-10">
@@ -339,7 +303,9 @@ export function TotalsReportScreen({ kind, basePath }: { kind: Kind; basePath: s
         Tap an entry to open it.{' '}
         {kind === 'received'
           ? "Only money actually collected counts here - a sale bill on credit shows up once the customer pays."
-          : "Only money that actually left counts here - a purchase bill on credit shows up once you pay the vendor."}
+          : kind === 'paid'
+            ? "Only money that actually left counts here - a purchase bill on credit shows up once you pay the vendor."
+            : `Every ${kind} bill counts here, whether or not the money has moved yet - see Total ${kind === 'sale' ? 'Received' : 'Paid'} for what actually has.`}
       </Text>
     </BookPage>
   );

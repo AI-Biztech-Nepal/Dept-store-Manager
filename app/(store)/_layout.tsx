@@ -8,6 +8,16 @@ import { ROLE_ACCENT } from '../../lib/constants/roleColors';
 import { WebSidebarShell, WEB_SIDEBAR_MIN_WIDTH, type WebNavItem } from '../../lib/components/web/WebSidebarShell';
 import { shortcuts as financeShortcuts } from '../../lib/components/finance/FinanceDashboardScreen';
 
+// Every report there is (the same list the Report page itself shows, see ReportScreen.tsx),
+// nested under Report in the side panel so each is one click away.
+const REPORT_FAMILY: WebNavItem[] = [
+  { href: '/(store)/sales-report', label: 'Sales Report', icon: 'trending-up' },
+  { href: '/(store)/purchase-report', label: 'Purchase Report', icon: 'cart' },
+  { href: '/(store)/expense-report', label: 'Expense Report', icon: 'receipt' },
+  { href: '/(store)/to-receive', label: 'Receivable Report', icon: 'people' },
+  { href: '/(store)/to-give', label: 'Payable Report', icon: 'storefront' },
+];
+
 // On web the sections sit in a persistent left rail (see WebSidebarShell),
 // reusing the Finance dashboard's own shortcut list so the two never drift.
 const NAV_ITEMS: WebNavItem[] = [
@@ -15,7 +25,12 @@ const NAV_ITEMS: WebNavItem[] = [
     href: '/(store)/finance',
     label: 'Dashboard',
     icon: 'wallet',
-    children: financeShortcuts('/(store)').map((s) => ({ href: s.href, label: s.label, icon: s.icon })),
+    children: financeShortcuts('/(store)').map((s) => ({
+      href: s.href,
+      label: s.label,
+      icon: s.icon,
+      ...(s.key === 'report' ? { children: REPORT_FAMILY } : null),
+    })),
   },
 ];
 
@@ -26,8 +41,11 @@ const HIDDEN: [string, string][] = [
   ['quick-payment', 'Quick Payment'],
   ['received', 'Total Received'],
   ['paid', 'Total Paid'],
-  ['to-receive', 'Receivable'],
-  ['to-give', 'Payable'],
+  ['sales-report', 'Sales Report'],
+  ['purchase-report', 'Purchase Report'],
+  ['expense-report', 'Expense Report'],
+  ['to-receive', 'Receivable Report'],
+  ['to-give', 'Payable Report'],
   ['bank-accounts', 'Bank Accounts'],
   ['bank-balances', 'Available Balance'],
   ['import-statement', 'Import Statement'],

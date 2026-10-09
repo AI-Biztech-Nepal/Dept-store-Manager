@@ -7,8 +7,8 @@ Nothing here reads or writes Jageer's database.
 
 ## Setup
 1. Create a new Supabase project. Copy `.env.example` to `.env`, fill in URL / anon key / DB URL.
-2. Run `supabase/migrations/0001_finance.sql`, then `0002_profiles_inventory.sql`
-   (SQL editor or psql). Then the smoke test at the bottom of 0001 (see `finance-port/00_STEP_BY_STEP.md` 1.4-1.5).
+2. Run `supabase/migrations/0001_finance.sql`, then `0002_profiles_inventory.sql`, then
+   `0003_party_types.sql` (SQL editor or psql). Then the smoke test at the bottom of 0001 (see `finance-port/00_STEP_BY_STEP.md` 1.4-1.5).
 3. `npm install`, then `npm run web` (or `npm run android`).
 4. **Set up email** (`supabase/email-templates/README.md`): custom SMTP + the sign-up code template.
    Without it, only your own Supabase team's addresses receive sign-up codes and reset links.

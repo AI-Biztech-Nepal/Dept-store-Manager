@@ -4,7 +4,8 @@
 // bordered table with a totals footer, with each page's own controls up in the
 // top bar - as reusable pieces, so the book pages read as one family.
 import { type ReactNode } from 'react';
-import { Platform, Pressable, ScrollView, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, ScrollView, TextInput, View, useWindowDimensions } from 'react-native';
+import { Text } from './CapsText';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useScreenHeader } from '../../hooks/useScreenHeader';
@@ -245,6 +246,8 @@ export function BookTable<T>({
   rowKey,
   onRowPress,
   groupOf,
+  highlight,
+  expanded,
   footer,
 }: {
   columns: BookColumn<T>[];
@@ -252,6 +255,10 @@ export function BookTable<T>({
   rowKey: (row: T) => string;
   onRowPress?: (row: T) => void;
   groupOf?: (row: T) => string;
+  /** Rows to tint, e.g. the one currently open for editing. */
+  highlight?: (row: T) => boolean;
+  /** Content shown directly under a row, e.g. its edit form; return null for a row with none. */
+  expanded?: (row: T) => ReactNode;
   footer?: { label: string; cells: Record<string, ReactNode> };
 }) {
   const cellStyle = (c: BookColumn<T>) => (c.width ? { width: c.width } : { flex: 1, minWidth: 0 });
@@ -286,6 +293,7 @@ export function BookTable<T>({
               onPress={onRowPress ? () => onRowPress(row) : undefined}
               disabled={!onRowPress}
               className="flex-row border-b border-gray-200"
+              style={highlight?.(row) ? { backgroundColor: '#EFF6FF' } : undefined}
             >
               {columns.map((c, i) => (
                 <View
@@ -297,6 +305,7 @@ export function BookTable<T>({
                 </View>
               ))}
             </Pressable>
+            {expanded?.(row)}
           </View>
         );
       })}

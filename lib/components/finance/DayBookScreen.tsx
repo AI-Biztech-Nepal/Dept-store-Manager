@@ -1,7 +1,8 @@
 // lib/components/finance/DayBookScreen.tsx
-import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView, Modal, KeyboardAvoidingView, Platform, useWindowDimensions } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../../hooks/useAuth';
@@ -12,15 +13,30 @@ import { FormSection } from './FormSection';
 import { BankAccountPickerModal } from './BankAccountPickerModal';
 import { useWideDetail } from '../detail/DetailLayout';
 import { dateLabels, useCalendarMode } from '../../hooks/useCalendarMode';
+import { DateFilterButton } from './DateRangeFilter';
+import { DropdownPanel, useDropdown } from './DropdownMenu';
 import { useBookToolbar } from './BookKit';
 import { MONEY } from './moneyColors';
 import { showAlert, getErrorMessage } from '../../utils/alert';
+import { ENTRY_KINDS } from './entryKinds';
 
 type Kind = 'opening' | 'received' | 'paid' | 'expense' | 'sale' | 'purchase' | 'transfer';
+
+/** Where money sits: 'cash' for cash in hand, otherwise a bank_accounts id
+ * (eSewa, Khalti, a bank...). */
+type AccountKey = string;
+const CASH: AccountKey = 'cash';
+type AccountOption = { key: AccountKey; name: string };
+
+/** One movement of money into or out of one account. A transfer has two (out
+ * of one account, into the other); a sale or purchase bill has none. */
+type Move = { account: AccountKey; amount: number; dir: 'in' | 'out' };
 
 type BookRow = {
   id: string;
   kind: Kind;
+  /** The day the entry sits on (YYYY-MM-DD); empty for the opening line. */
+  date: string;
   time: string;
   details: string;
   sub: string | null;
@@ -32,13 +48,17 @@ type BookRow = {
   cashOut: number | null;
   /** Running cash + bank balance after this row; null for non-cash rows. */
   balance: number | null;
+  /** Name of the account the money went through, for the row's tag. */
+  account: string | null;
+  /** The same movement per account, so one account can be viewed on its own. */
+  moves: Move[];
   sortKey: string;
   href?: string;
   /** What this row actually is in the database, so it can be edited here. */
   edit?: EditTarget;
 };
 
-type EditTable = 'business_transactions' | 'customer_ledger_entries' | 'vendor_ledger_entries' | 'account_transfers';
+type EditTable = 'customer_ledger_entries' | 'vendor_ledger_entries' | 'account_transfers';
 
 type EditValues = {
   date: string;
@@ -73,8 +93,8 @@ type EditTarget = {
 
 const KIND: Record<Kind, { label: string; color: string; bg: string }> = {
   opening: { label: 'Opening', color: '#374151', bg: '#F3F4F6' },
-  received: { label: 'Cash in', color: '#047857', bg: '#ECFDF5' },
-  paid: { label: 'Paid out', color: '#B91C1C', bg: '#FEF2F2' },
+  received: { label: 'Received', color: '#047857', bg: '#ECFDF5' },
+  paid: { label: 'Payment Out', color: '#B91C1C', bg: '#FEF2F2' },
   expense: { label: 'Expense', color: '#B91C1C', bg: '#FEF2F2' },
   sale: { label: 'Sale bill', color: MONEY.in.text, bg: MONEY.in.bg },
   purchase: { label: 'Purchase bill', color: MONEY.out.text, bg: MONEY.out.bg },
@@ -86,11 +106,6 @@ const KIND: Record<Kind, { label: string; color: string; bg: string }> = {
 function localDay(iso: string): string {
   const d = new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function shiftDay(day: string, delta: number): string {
-  const [y, m, d] = day.split('-').map(Number);
-  return localDay(new Date(y, m - 1, d + delta).toISOString());
 }
 
 function timeOf(iso: string): string {
@@ -124,11 +139,26 @@ function TypePill({ kind }: { kind: Kind }) {
   );
 }
 
-/** Every entry of the day in one cash-book table, in time order: opening
- * balance first, then cash in / paid out / expenses (which move the running
- * balance) mixed with the day's sales and purchase bills and transfers
- * (which don't), closing balance last. */
-function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, onOpenRow }: {
+/** Which account an entry went through - Cash, eSewa, a bank... */
+function AccountPill({ row }: { row: BookRow }) {
+  if (!row.account) return null;
+  const name = row.account;
+  return (
+    <View className="flex-row items-center self-start rounded-full border border-gray-300 bg-white px-2 py-0.5" style={{ gap: 3 }}>
+      <Ionicons name={row.moves[0]?.account === CASH ? 'cash-outline' : 'business-outline'} size={10} color="#4B5563" />
+      <Text className="text-[10.5px] font-semibold text-gray-600" numberOfLines={1}>
+        {name}
+      </Text>
+    </View>
+  );
+}
+
+/** Every entry of the day (or week / month) in one cash-book table, in date and
+ * time order: opening balance first, then cash in / paid out / expenses (which
+ * move the running balance) mixed with the sales and purchase bills and
+ * transfers (which don't), closing balance last. `dayLabel` is given for a
+ * view of more than one day, and puts a date band above each day's entries. */
+function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, dayLabel, onOpenRow }: {
   rows: BookRow[];
   opening: number;
   totalIn: number;
@@ -136,18 +166,25 @@ function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, onOpenR
   closing: number;
   /** Show every column; otherwise Time | Details | Amount | Balance. */
   full: boolean;
+  dayLabel?: (date: string) => string;
   onOpenRow: (row: BookRow) => void;
 }) {
   const cell = 'px-2.5 py-2 border-r border-gray-200';
+  const dayBand = (r: BookRow, index: number) =>
+    dayLabel && r.kind !== 'opening' && rows[index - 1]?.date !== r.date ? (
+      <View className="border-b border-gray-200 bg-gray-50 px-2.5 py-1.5">
+        <Text className="text-xs font-bold uppercase tracking-wide text-gray-500">{dayLabel(r.date)}</Text>
+      </View>
+    ) : null;
   const headCell = (label: string, style: object, right = false) => (
-    <Text className={`${cell} text-[11.5px] font-bold text-gray-600 ${right ? 'text-right' : ''}`} style={style}>
+    <Text className={`${cell} text-xs font-bold text-gray-600 ${right ? 'text-right' : ''}`} style={style}>
       {label}
     </Text>
   );
   const num = (value: number | null, style: object, color = '#111827', bold = false) => (
     <Text
       className={`${cell} text-right text-[12.5px] ${bold ? 'font-bold' : 'font-medium'}`}
-      style={[style, { color: value == null ? '#9CA3AF' : color }]}
+      style={[style, { color: value == null ? '#6B7280' : color }]}
       numberOfLines={1}
     >
       {value == null ? '—' : money(value)}
@@ -165,31 +202,36 @@ function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, onOpenR
           {headCell('Time', { width: 50 })}
           {headCell('Transaction details', { flex: 1 })}
           {headCell('Amount', { width: 82 }, true)}
-          <Text className="px-2.5 py-2 text-right text-[11.5px] font-bold text-gray-600" style={{ width: 84 }}>
+          <Text className="px-2.5 py-2 text-right text-xs font-bold text-gray-600" style={{ width: 84 }}>
             Balance
           </Text>
         </View>
-        {rows.map((r) => {
+        {rows.map((r, index) => {
           const cash = r.cashIn ?? r.cashOut;
           const amountText = r.cashIn != null ? `+${money(r.cashIn)}` : r.cashOut != null ? `−${money(r.cashOut)}` : money(r.amount);
           const amountColor = r.cashIn != null ? '#047857' : r.cashOut != null ? '#B91C1C' : '#6B7280';
           return (
-            <Pressable key={r.id} onPress={open(r)} disabled={!r.edit && !r.href} className="flex-row border-b border-gray-200">
-              <Text className={`${cell} text-[11.5px] text-gray-500`} style={{ width: 50 }} numberOfLines={1}>
+            <Fragment key={r.id}>
+            {dayBand(r, index)}
+            <Pressable onPress={open(r)} disabled={!r.edit && !r.href} className="flex-row border-b border-gray-200">
+              <Text className={`${cell} text-xs text-gray-500`} style={{ width: 50 }} numberOfLines={1}>
                 {r.time}
               </Text>
               <View className={cell} style={{ flex: 1, gap: 2 }}>
                 <Text className={`text-[13px] text-gray-900 ${r.kind === 'opening' ? 'font-bold' : 'font-medium'}`} numberOfLines={2}>
                   {r.details}
                 </Text>
-                <TypePill kind={r.kind} />
+                <View className="flex-row flex-wrap" style={{ gap: 4 }}>
+                  <TypePill kind={r.kind} />
+                  <AccountPill row={r} />
+                </View>
                 {!!r.sub && (
-                  <Text className="text-[11px] text-gray-400" numberOfLines={2}>
+                  <Text className="text-xs text-gray-500" numberOfLines={r.kind === 'opening' ? undefined : 2}>
                     {r.sub}
                   </Text>
                 )}
                 {r.invoice != null && (
-                  <Text className="text-[11px] text-gray-500">
+                  <Text className="text-xs text-gray-500">
                     Invoice {money(r.invoice)}
                     {r.discount ? ` · Discount ${money(r.discount)}` : ''}
                   </Text>
@@ -197,17 +239,18 @@ function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, onOpenR
               </View>
               <Text
                 className={`${cell} text-right text-[12.5px] ${cash != null ? 'font-bold' : 'font-medium'}`}
-                style={{ width: 82, color: r.kind === 'opening' ? '#9CA3AF' : amountColor }}
+                style={{ width: 82, color: r.kind === 'opening' ? '#6B7280' : amountColor }}
               >
                 {r.kind === 'opening' ? '—' : amountText}
               </Text>
               <Text
                 className="px-2.5 py-2 text-right text-[12.5px] font-semibold"
-                style={{ width: 84, color: r.balance == null ? '#9CA3AF' : '#111827' }}
+                style={{ width: 84, color: r.balance == null ? '#6B7280' : '#111827' }}
               >
                 {money(r.balance)}
               </Text>
             </Pressable>
+            </Fragment>
           );
         })}
         <View className="flex-row bg-gray-50">
@@ -235,14 +278,15 @@ function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, onOpenR
             {headCell('Bill amount', { width: COL.amount }, true)}
             {headCell('Cash in', { width: COL.cashIn }, true)}
             {headCell('Cash out', { width: COL.cashOut }, true)}
-            <Text className="px-2.5 py-2 text-right text-[11.5px] font-bold text-gray-600" style={{ width: COL.balance }}>
+            <Text className="px-2.5 py-2 text-right text-xs font-bold text-gray-600" style={{ width: COL.balance }}>
               Balance
             </Text>
           </View>
 
-          {rows.map((r) => (
+          {rows.map((r, index) => (
+            <Fragment key={r.id}>
+            {dayBand(r, index)}
             <Pressable
-              key={r.id}
               onPress={open(r)}
               disabled={!r.edit && !r.href}
               className="flex-row border-b border-gray-200"
@@ -256,13 +300,14 @@ function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, onOpenR
                   {r.details}
                 </Text>
                 {!!r.sub && (
-                  <Text className="text-[11px] text-gray-400" numberOfLines={1}>
+                  <Text className="text-xs text-gray-500" numberOfLines={r.kind === 'opening' ? undefined : 1}>
                     {r.sub}
                   </Text>
                 )}
               </View>
-              <View className={cell} style={{ width: COL.type }}>
+              <View className={cell} style={{ width: COL.type, gap: 3 }}>
                 <TypePill kind={r.kind} />
+                <AccountPill row={r} />
               </View>
               {num(r.invoice, { width: COL.invoice }, '#4B5563')}
               {num(r.discount, { width: COL.discount }, '#4B5563')}
@@ -271,11 +316,12 @@ function DayBookTable({ rows, opening, totalIn, totalOut, closing, full, onOpenR
               {num(r.cashOut, { width: COL.cashOut }, '#B91C1C', true)}
               <Text
                 className="px-2.5 py-2 text-right text-[13px] font-bold"
-                style={{ width: COL.balance, color: r.balance == null ? '#9CA3AF' : '#111827' }}
+                style={{ width: COL.balance, color: r.balance == null ? '#6B7280' : '#111827' }}
               >
                 {money(r.balance)}
               </Text>
             </Pressable>
+            </Fragment>
           ))}
 
           <View className="flex-row bg-gray-50">
@@ -328,13 +374,11 @@ function EditEntryModal({ target, onClose }: { target: EditTarget | null; onClos
   const bankAccounts = useBankAccounts(userId);
   const [showAccountPicker, setShowAccountPicker] = useState(false);
   const updates = {
-    business_transactions: useSupabaseUpdate('business_transactions'),
     customer_ledger_entries: useSupabaseUpdate('customer_ledger_entries'),
     vendor_ledger_entries: useSupabaseUpdate('vendor_ledger_entries'),
     account_transfers: useSupabaseUpdate('account_transfers'),
   };
   const removals = {
-    business_transactions: useSupabaseDelete('business_transactions'),
     customer_ledger_entries: useSupabaseDelete('customer_ledger_entries'),
     vendor_ledger_entries: useSupabaseDelete('vendor_ledger_entries'),
     account_transfers: useSupabaseDelete('account_transfers'),
@@ -370,16 +414,6 @@ function EditEntryModal({ target, onClose }: { target: EditTarget | null; onClos
     const amount = Number(values.amount);
     const note = values.note.trim() || null;
     switch (target!.table) {
-      case 'business_transactions':
-        return {
-          bill_date: values.date,
-          amount,
-          discount_amount: values.discount.trim() ? Number(values.discount) : 0,
-          party_name: values.party.trim() || null,
-          bill_no: values.billNo.trim() || null,
-          bank_account_id: values.bankAccountId,
-          note,
-        };
       case 'customer_ledger_entries':
       case 'vendor_ledger_entries':
         return {
@@ -452,7 +486,7 @@ function EditEntryModal({ target, onClose }: { target: EditTarget | null; onClos
             <View className="flex-row items-center gap-2.5 px-5 py-4" style={{ backgroundColor: '#1D4ED8' }}>
               <View className="flex-1">
                 <Text className="text-[16px] font-bold text-white">{locked ? 'Entry details' : 'Edit entry'}</Text>
-                <Text className="mt-0.5 text-[11.5px] text-white/85">{target.title}</Text>
+                <Text className="mt-0.5 text-xs text-white/85">{target.title}</Text>
               </View>
               <Pressable onPress={onClose} hitSlop={8} accessibilityLabel="Close">
                 <Ionicons name="close" size={22} color="#FFFFFF" />
@@ -545,7 +579,7 @@ function EditEntryModal({ target, onClose }: { target: EditTarget | null; onClos
                   )}
                 </View>
                 <View className="mt-3">
-                  <Text className="mb-1 text-xs font-medium text-gray-500">Note</Text>
+                  <Text className="mb-1 text-xs font-medium text-gray-500">Remarks</Text>
                   <EditInput
                     value={form.note}
                     onChangeText={set('note')}
@@ -584,7 +618,7 @@ function EditEntryModal({ target, onClose }: { target: EditTarget | null; onClos
                     </Text>
                   </Pressable>
                   {confirmingDelete && (
-                    <Text className="mt-2 text-center text-[11px] text-gray-400">
+                    <Text className="mt-2 text-center text-xs text-gray-500">
                       It disappears from the Day Book and from every total that counted it.
                     </Text>
                   )}
@@ -610,67 +644,135 @@ function EditEntryModal({ target, onClose }: { target: EditTarget | null; onClos
 
 /** The five things a day can gain, behind one button - the same forms the
  * Finance menu opens, without leaving the Day Book to find them. */
-const NEW_ENTRY_KINDS: { key: string; label: string; icon: ComponentProps<typeof Ionicons>['name']; color: string; path: string }[] = [
-  { key: 'received', label: 'Received', icon: 'arrow-down-circle', color: '#059669', path: '/quick-payment?type=in' },
-  { key: 'payment-out', label: 'Payment Out', icon: 'arrow-up-circle', color: '#DC2626', path: '/quick-payment?type=out' },
-  { key: 'sale', label: 'Sale', icon: 'trending-up', color: '#059669', path: '/transactions?type=sale&add=1' },
-  { key: 'purchase', label: 'Purchase', icon: 'cart', color: '#DC2626', path: '/transactions?type=purchase&add=1' },
-  { key: 'expense', label: 'Expense', icon: 'receipt', color: '#DC2626', path: '/transactions?type=expense&add=1' },
-];
+const NEW_ENTRY_KINDS = ENTRY_KINDS.map((kind) => ({
+  key: kind.key,
+  label: kind.menuLabel ?? kind.label,
+  icon: kind.icon,
+  color: kind.color,
+  path: kind.path,
+}));
 
 function NewEntryMenu({ basePath }: { basePath: string }) {
-  const [open, setOpen] = useState(false);
+  const dropdown = useDropdown(230);
 
   return (
     <>
       <Pressable
-        onPress={() => setOpen(true)}
-        className="h-9 flex-row items-center justify-center gap-1.5 rounded-lg px-3.5"
-        style={{ backgroundColor: '#1D4ED8' }}
+        ref={dropdown.buttonRef}
+        onPress={dropdown.show}
+        accessibilityRole="button"
+        accessibilityLabel="New entry, choose what to record"
+        accessibilityState={{ expanded: dropdown.open }}
+        className="flex-row items-center justify-center gap-1.5 rounded-lg px-3.5"
+        style={{ minHeight: 36, backgroundColor: '#1D4ED8' }}
       >
         <Ionicons name="add" size={16} color="#FFFFFF" />
         <Text className="text-[13px] font-semibold text-white">New entry</Text>
         <Ionicons name="chevron-down" size={14} color="#FFFFFF" />
       </Pressable>
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable className="flex-1 items-center justify-center bg-black/50 px-4" onPress={() => setOpen(false)}>
-          <Pressable onPress={() => {}} className="w-full overflow-hidden rounded-2xl bg-white" style={{ maxWidth: 380 }}>
-            <View className="flex-row items-center gap-2.5 px-5 py-4" style={{ backgroundColor: '#1D4ED8' }}>
-              <Text className="flex-1 text-[16px] font-bold text-white">What are you recording?</Text>
-              <Pressable onPress={() => setOpen(false)} hitSlop={8} accessibilityLabel="Close">
-                <Ionicons name="close" size={22} color="#FFFFFF" />
-              </Pressable>
-            </View>
-            {NEW_ENTRY_KINDS.map((kind, i) => (
-              <Pressable
-                key={kind.key}
-                onPress={() => {
-                  setOpen(false);
-                  router.push(`${basePath}${kind.path}` as any);
-                }}
-                className={`flex-row items-center gap-3 px-5 py-3.5 ${i === NEW_ENTRY_KINDS.length - 1 ? '' : 'border-b border-gray-100'}`}
-              >
-                <Ionicons name={kind.icon} size={20} color={kind.color} />
-                <Text className="flex-1 text-[15px] font-semibold text-gray-900">{kind.label}</Text>
-                <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
-              </Pressable>
-            ))}
+      <DropdownPanel dropdown={dropdown}>
+        <Text className="border-b border-gray-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+          What are you recording?
+        </Text>
+        {NEW_ENTRY_KINDS.map((kind) => (
+          <Pressable
+            key={kind.key}
+            accessibilityRole="button"
+            accessibilityLabel={kind.label}
+            onPress={() => {
+              dropdown.hide();
+              router.push(`${basePath}${kind.path}` as any);
+            }}
+            className="flex-row items-center px-4 py-3"
+            style={{ gap: 10 }}
+          >
+            <Ionicons name={kind.icon} size={18} color={kind.color} />
+            <Text className="flex-1 text-[14px] font-medium text-gray-900">{kind.label}</Text>
           </Pressable>
-        </Pressable>
-      </Modal>
+        ))}
+      </DropdownPanel>
     </>
   );
 }
 
-function Stat({ label, value, color }: { label: string; value: number; color: string }) {
+/** A button floating over the bottom corner of the page that picks which account
+ * the Day Book shows: all of them together, Cash, or one bank / wallet. It names
+ * the account in use, and opens a small menu above itself; tapping anywhere else
+ * closes the menu. */
+function AccountPicker({ options, selected, onSelect }: {
+  options: AccountOption[];
+  /** null is every account together. */
+  selected: AccountKey | null;
+  onSelect: (key: AccountKey | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const insets = useSafeAreaInsets();
+  type IconName = ComponentProps<typeof Ionicons>['name'];
+  const iconFor = (key: AccountKey | null): IconName => (key == null ? 'wallet-outline' : key === CASH ? 'cash-outline' : 'business-outline');
+  const current = options.find((o) => o.key === selected);
+  const choices: { key: AccountKey | null; name: string }[] = [{ key: null, name: 'All accounts' }, ...options];
+
   return (
-    <View className="rounded-xl border border-gray-200 bg-white px-3.5 py-2.5" style={{ flexGrow: 1, flexBasis: 140 }}>
-      <Text className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</Text>
-      <Text className="mt-0.5 text-[16px] font-extrabold" style={{ color }}>
-        NPR {money(value)}
-      </Text>
-    </View>
+    <>
+      {open && (
+        <Pressable
+          onPress={() => setOpen(false)}
+          accessibilityLabel="Close account menu"
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}
+        />
+      )}
+      <View style={{ position: 'absolute', right: 16 + insets.right, bottom: 16 + insets.bottom, alignItems: 'flex-end', gap: 8, zIndex: 11 }}>
+        {open && (
+          <View
+            className="overflow-hidden rounded-xl border border-gray-200 bg-white"
+            style={{ minWidth: 210, maxHeight: 340, boxShadow: '0 12px 32px rgba(16,24,40,0.22)' }}
+          >
+            <Text className="border-b border-gray-100 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Show money through
+            </Text>
+            <ScrollView>
+              {choices.map((c) => {
+                const on = c.key === (current?.key ?? null);
+                return (
+                  <Pressable
+                    key={c.key ?? 'all'}
+                    onPress={() => {
+                      onSelect(c.key);
+                      setOpen(false);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: on }}
+                    className="flex-row items-center px-4 py-3"
+                    style={{ gap: 10, backgroundColor: on ? '#EFF6FF' : undefined }}
+                  >
+                    <Ionicons name={iconFor(c.key)} size={17} color={on ? '#1D4ED8' : '#6B7280'} />
+                    <Text className={`flex-1 text-[14px] ${on ? 'font-bold text-blue-700' : 'font-medium text-gray-900'}`} numberOfLines={1}>
+                      {c.name}
+                    </Text>
+                    {on && <Ionicons name="checkmark" size={17} color="#1D4ED8" />}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+        <Pressable
+          onPress={() => setOpen((o) => !o)}
+          accessibilityRole="button"
+          accessibilityLabel={`Showing ${current?.name ?? 'all accounts'}. Choose an account`}
+          accessibilityState={{ expanded: open }}
+          className="flex-row items-center rounded-full px-4"
+          style={{ minHeight: 44, gap: 8, backgroundColor: '#1D4ED8', boxShadow: '0 8px 20px rgba(29,78,216,0.35)' }}
+        >
+          <Ionicons name={iconFor(current?.key ?? null)} size={17} color="#FFFFFF" />
+          <Text className="max-w-[180px] text-[14px] font-semibold text-white" numberOfLines={1}>
+            {current?.name ?? 'All accounts'}
+          </Text>
+          <Ionicons name={open ? 'chevron-down' : 'chevron-up'} size={15} color="#FFFFFF" />
+        </Pressable>
+      </View>
+    </>
   );
 }
 
@@ -687,8 +789,16 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
   const fullTable = wide && windowWidth >= FULL_TABLE_MIN_WINDOW;
   const [calendarMode] = useCalendarMode();
   const today = localDay(new Date().toISOString());
-  const [day, setDay] = useState(today);
+  // What the Filter button sets: today by default, otherwise a range. An empty
+  // From reaches back to the start of the books (so nothing is carried in as an
+  // opening balance); an empty To runs through today.
+  const [range, setRange] = useState({ from: today, to: today });
+  const from = range.from;
+  const day = range.to || today;
+  const singleDay = from === day;
   const [editing, setEditing] = useState<EditTarget | null>(null);
+  // null shows every account together; otherwise just what went through that one.
+  const [selectedAccount, setSelectedAccount] = useState<AccountKey | null>(null);
 
   const owner: Record<string, string> = userId ? { owner_id: userId } : {};
   const { data: transactions, isLoading } = useSupabaseQuery('business_transactions', { filters: owner, enabled: !!userId });
@@ -703,16 +813,27 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
     const contactName = new Map((contacts ?? []).map((c) => [c.id, c.name]));
     const accountName = new Map((accounts ?? []).map((a) => [a.id, a.name]));
     const categoryName = new Map((categories ?? []).map((c) => [c.id, c.name]));
-    const via = (bankId: string | null) => (bankId ? (accountName.get(bankId) ?? 'Bank') : 'Cash');
-    const blank = { invoice: null, discount: null, amount: null, cashIn: null, cashOut: null, balance: null };
+    const via = (bankId: string | null) => (bankId ? (accountName.get(bankId) ?? 'Other account') : 'Cash');
+    const keyOf = (bankId: string | null): AccountKey => bankId ?? CASH;
+    const blank = { invoice: null, discount: null, amount: null, cashIn: null, cashOut: null, balance: null, account: null, moves: [] as Move[] };
 
+    // Every account's balance at the start of the day. Transfers count here -
+    // they leave one account and enter another - though they net to nothing in
+    // the combined `opening`, so that total is unchanged by them.
+    const openingBy: Record<AccountKey, number> = {};
+    const carry = (account: AccountKey, delta: number) => {
+      openingBy[account] = (openingBy[account] ?? 0) + delta;
+    };
     let opening = 0;
     const rows: BookRow[] = [];
 
     for (const t of transactions ?? []) {
       const date = t.bill_date ?? localDay(t.created_at);
-      if (t.type === 'expense' && date < day) opening -= t.amount;
-      if (date !== day) continue;
+      if (t.type === 'expense' && date < from) {
+        opening -= t.amount;
+        carry(keyOf(t.bank_account_id), -t.amount);
+      }
+      if (date < from || date > day) continue;
       const discount = t.discount_amount ?? 0;
       const category = t.expense_category_id ? categoryName.get(t.expense_category_id) : null;
       const isExpense = t.type === 'expense';
@@ -720,6 +841,7 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
         ...blank,
         id: t.id,
         kind: isExpense ? 'expense' : t.type === 'sale' ? 'sale' : 'purchase',
+        date,
         time: timeOf(t.created_at),
         details: isExpense
           ? t.party_name || category || 'Expense'
@@ -729,7 +851,7 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
             t.bill_no ? `Bill #${t.bill_no}` : null,
             isExpense && t.party_name ? category : null,
             t.note,
-            isExpense ? via(t.bank_account_id) : t.payment_mode === 'credit' ? 'On credit' : null,
+            !isExpense && t.payment_mode === 'credit' ? 'On credit' : null,
           ]
             .filter(Boolean)
             .join(' · ') || null,
@@ -740,25 +862,12 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
         // purchase bill is a debt until its payment is recorded.
         amount: isExpense ? null : t.amount,
         cashOut: isExpense ? t.amount : null,
+        account: isExpense ? via(t.bank_account_id) : null,
+        moves: isExpense ? [{ account: keyOf(t.bank_account_id), amount: t.amount, dir: 'out' }] : [],
         sortKey: t.created_at,
-        edit: {
-          table: 'business_transactions',
-          id: t.id,
-          title: `${isExpense ? 'Expense' : t.type === 'sale' ? 'Sale bill' : 'Purchase bill'} · ${t.party_name ?? 'no name'}`,
-          fields: { party: true, billNo: true, discount: true, method: true },
-          partyLabel: isExpense ? 'Paid to' : t.type === 'sale' ? 'Customer' : 'Vendor',
-          numberLabel: 'Bill No.',
-          values: {
-            date,
-            amount: amountText(t.amount),
-            party: t.party_name ?? '',
-            billNo: t.bill_no ?? '',
-            discount: amountText(t.discount_amount ?? 0),
-            receiptNo: '',
-            note: t.note ?? '',
-            bankAccountId: t.bank_account_id ?? null,
-          },
-        },
+        // A bill opens on its own page - the very page that recorded it, with the
+        // bill loaded - rather than in a cut-down popup.
+        href: `${basePath}/transactions?type=${t.type}&add=1&edit=${t.id}`,
       });
     }
 
@@ -767,22 +876,28 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
       // Booking debits are the Sale itself, not cash.
       if (!isIn && e.source !== 'manual') continue;
       const date = e.entry_date ?? localDay(e.created_at);
-      if (date < day) opening += isIn ? e.amount : -e.amount;
-      if (date !== day) continue;
+      if (date < from) {
+        opening += isIn ? e.amount : -e.amount;
+        carry(keyOf(e.bank_account_id), isIn ? e.amount : -e.amount);
+      }
+      if (date < from || date > day) continue;
       rows.push({
         ...blank,
         id: e.id,
         kind: isIn ? 'received' : 'paid',
+        date,
         time: timeOf(e.created_at),
-        details: `${isIn ? 'Received from' : 'Paid to'} ${contactName.get(e.customer_id) ?? 'customer'}`,
-        sub: [e.receipt_no ? `Receipt #${e.receipt_no}` : null, via(e.bank_account_id), e.note].filter(Boolean).join(' · ') || null,
+        details: `${isIn ? 'Received from' : 'Payment Out to'} ${contactName.get(e.customer_id) ?? 'customer'}`,
+        sub: [e.receipt_no ? `${isIn ? 'Receipt' : 'Payment'} No. ${e.receipt_no}` : null, e.note].filter(Boolean).join(' · ') || null,
         cashIn: isIn ? e.amount : null,
         cashOut: isIn ? null : e.amount,
+        account: via(e.bank_account_id),
+        moves: [{ account: keyOf(e.bank_account_id), amount: e.amount, dir: isIn ? 'in' : 'out' }],
         sortKey: e.created_at,
         edit: {
           table: 'customer_ledger_entries',
           id: e.id,
-          title: `${isIn ? 'Received from' : 'Paid to'} ${contactName.get(e.customer_id) ?? 'customer'}`,
+          title: `${isIn ? 'Received from' : 'Payment Out to'} ${contactName.get(e.customer_id) ?? 'customer'}`,
           lockedReason:
             e.source === 'manual'
               ? undefined
@@ -809,21 +924,27 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
       // Only payments to a vendor move money; debits are the Purchase.
       if (e.entry_type !== 'credit') continue;
       const date = e.entry_date ?? localDay(e.created_at);
-      if (date < day) opening -= e.amount;
-      if (date !== day) continue;
+      if (date < from) {
+        opening -= e.amount;
+        carry(keyOf(e.bank_account_id), -e.amount);
+      }
+      if (date < from || date > day) continue;
       rows.push({
         ...blank,
         id: e.id,
         kind: 'paid',
+        date,
         time: timeOf(e.created_at),
-        details: `Paid to ${contactName.get(e.vendor_id) ?? 'vendor'}`,
-        sub: [e.receipt_no ? `Receipt #${e.receipt_no}` : null, via(e.bank_account_id), e.note].filter(Boolean).join(' · ') || null,
+        details: `Payment Out to ${contactName.get(e.vendor_id) ?? 'vendor'}`,
+        sub: [e.receipt_no ? `Payment No. ${e.receipt_no}` : null, e.note].filter(Boolean).join(' · ') || null,
         cashOut: e.amount,
+        account: via(e.bank_account_id),
+        moves: [{ account: keyOf(e.bank_account_id), amount: e.amount, dir: 'out' }],
         sortKey: e.created_at,
         edit: {
           table: 'vendor_ledger_entries',
           id: e.id,
-          title: `Paid to ${contactName.get(e.vendor_id) ?? 'vendor'}`,
+          title: `Payment Out to ${contactName.get(e.vendor_id) ?? 'vendor'}`,
           lockedReason:
             e.source === 'manual'
               ? undefined
@@ -849,15 +970,25 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
     // A transfer only moves money between the owner's own accounts, so it
     // never changes the combined balance - listed for reference only.
     for (const tr of transfers ?? []) {
-      if ((tr.transfer_date ?? localDay(tr.created_at)) !== day) continue;
+      const date = tr.transfer_date ?? localDay(tr.created_at);
+      if (date < from) {
+        carry(keyOf(tr.from_account_id), -tr.amount);
+        carry(keyOf(tr.to_account_id), tr.amount);
+      }
+      if (date < from || date > day) continue;
       rows.push({
         ...blank,
         id: tr.id,
         kind: 'transfer',
+        date,
         time: timeOf(tr.created_at),
         details: `${via(tr.from_account_id)} → ${via(tr.to_account_id)}`,
         sub: tr.note,
         amount: tr.amount,
+        moves: [
+          { account: keyOf(tr.from_account_id), amount: tr.amount, dir: 'out' },
+          { account: keyOf(tr.to_account_id), amount: tr.amount, dir: 'in' },
+        ],
         sortKey: tr.created_at,
         edit: {
           table: 'account_transfers',
@@ -880,112 +1011,125 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
       });
     }
 
-    rows.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+    // By the day each entry sits on, then by when it was entered - so a longer
+    // view reads in date order and the running balance follows it.
+    rows.sort((a, b) => a.date.localeCompare(b.date) || a.sortKey.localeCompare(b.sortKey));
 
-    let running = opening;
+    // Where the opening balance sits, account by account - what each account held
+    // at the start of the period, which adds up to the Opening balance.
+    // An entry can point at an account that isn't in the list (one that was
+    // removed, say); it still gets its own place here, so the accounts always
+    // add up to the opening balance.
+    const listed = [{ key: CASH, name: 'Cash' }, ...(accounts ?? []).map((a) => ({ key: a.id, name: a.name }))];
+    const listedKeys = new Set(listed.map((o) => o.key));
+    // Accounts seen either before the period (an opening balance) or in it (an entry).
+    const seen = new Set([...Object.keys(openingBy), ...rows.flatMap((r) => r.moves.map((m) => m.account))]);
+    const stray = accounts ? [...seen].filter((k) => !listedKeys.has(k)) : [];
+    const openingByAccount = [...listed, ...stray.map((key) => ({ key, name: 'Other account' }))]
+      .map((o) => ({ name: o.name, amount: openingBy[o.key] ?? 0 }))
+      .filter((a) => Math.round(a.amount) !== 0);
+
+    // One account on its own: its opening balance, and only the entries that
+    // touched it. A transfer is a real in or out there, unlike in the combined
+    // view where it nets to nothing.
+    const accountOptions: AccountOption[] = [...listed, ...stray.map((key) => ({ key, name: 'Other account' }))];
+    const selected = accountOptions.find((o) => o.key === selectedAccount) ?? null;
+    let viewRows = rows;
+    let viewOpening = opening;
+    if (selected) {
+      viewOpening = openingBy[selected.key] ?? 0;
+      viewRows = rows
+        .filter((r) => r.moves.some((m) => m.account === selected.key))
+        .map((r) => {
+          const mine = r.moves.filter((m) => m.account === selected.key);
+          const cashIn = mine.filter((m) => m.dir === 'in').reduce((sum, m) => sum + m.amount, 0);
+          const cashOut = mine.filter((m) => m.dir === 'out').reduce((sum, m) => sum + m.amount, 0);
+          return { ...r, cashIn: cashIn || null, cashOut: cashOut || null, amount: r.kind === 'transfer' ? null : r.amount };
+        });
+    }
+
+    let running = viewOpening;
     let totalIn = 0;
     let totalOut = 0;
-    let totalSales = 0;
-    let totalPurchases = 0;
-    for (const r of rows) {
+    for (const r of viewRows) {
       if (r.cashIn != null || r.cashOut != null) {
         totalIn += r.cashIn ?? 0;
         totalOut += r.cashOut ?? 0;
         running += (r.cashIn ?? 0) - (r.cashOut ?? 0);
         r.balance = running;
       }
-      if (r.kind === 'sale') totalSales += r.amount ?? 0;
-      if (r.kind === 'purchase') totalPurchases += r.amount ?? 0;
     }
+
+    // "Cash -13,259  +  Esewa -103,771  +  Jyoti Bikash Bank 416,777  =  299,747" - only
+    // when more than one account holds money; with one (or none) there is nothing to add up.
+    const openingSub = selected
+      ? `${selected.name} at the start of ${singleDay ? 'the day' : 'this period'}`
+      : openingByAccount.length > 1
+        ? `${openingByAccount.map((a) => `${a.name} ${money(a.amount)}`).join('  +  ')}  =  ${money(opening)}`
+        : null;
 
     const openingRow: BookRow = {
       ...blank,
       id: 'opening',
       kind: 'opening',
+      date: '',
       time: '',
       details: 'Opening balance',
-      sub: 'Cash + bank at the start of the day',
-      balance: opening,
+      sub: openingSub,
+      balance: viewOpening,
       sortKey: '',
     };
 
     return {
-      rows: [openingRow, ...rows],
-      entryCount: rows.length,
-      opening,
+      rows: [openingRow, ...viewRows],
+      entryCount: viewRows.length,
+      opening: viewOpening,
       totalIn,
       totalOut,
-      totalSales,
-      totalPurchases,
       closing: running,
+      openingByAccount,
+      accountOptions,
+      selected,
     };
-  }, [transactions, customerEntries, vendorEntries, transfers, contacts, accounts, categories, day, basePath]);
+  }, [transactions, customerEntries, vendorEntries, transfers, contacts, accounts, categories, day, from, singleDay, basePath, selectedAccount]);
 
-  const [mainDate, otherDate] = dateLabels(day, calendarMode);
+  // The date band above each day of a longer view.
+  const dayLabel = (date: string) => dateLabels(date, calendarMode).join('  ·  ');
 
-  // The day picker (previous / date / next / Today) and New entry live in the top
-  // bar on a wide screen - the date box already shows the day in both calendars -
-  // and as a plain row above the tiles on a narrow one.
+  // Today is the resting state, so the button reads "Today" and carries no
+  // range; anything else shows as the range, and clearing it comes back to today.
+  const isToday = from === today && day === today;
+  const applyRange = (f: string, t: string) => setRange(f || t ? { from: f, to: t } : { from: today, to: today });
+
+  // The Filter button and New entry live in the top bar on a wide screen, and as
+  // a plain row above the tiles on a narrow one.
   const toolbar = useBookToolbar(
     {
       wide,
-      right: (inBar) => (
+      right: () => (
         <>
-          <Pressable
-            onPress={() => setDay((d) => shiftDay(d, -1))}
-            accessibilityLabel="Previous day"
-            className="h-9 w-9 items-center justify-center rounded-lg border border-gray-200"
-          >
-            <Ionicons name="chevron-back" size={18} color="#374151" />
-          </Pressable>
-          <View style={inBar ? { width: 200 } : { flexGrow: 1, minWidth: 160 }}>
-            <DateField
-              value={day}
-              onChange={(v) => v && setDay(v)}
-              renderTrigger={(open) => (
-                <Pressable
-                  onPress={open}
-                  accessibilityLabel="Pick a date"
-                  className="h-9 justify-center rounded-lg border border-gray-300 bg-white px-3"
-                >
-                  <Text className="text-[12px] font-bold leading-[14px] text-gray-900" numberOfLines={1}>
-                    {mainDate}
-                  </Text>
-                  <Text className="text-[10px] leading-[12px] text-gray-500" numberOfLines={1}>
-                    {otherDate}
-                  </Text>
-                </Pressable>
-              )}
-            />
-          </View>
-          <Pressable
-            onPress={() => setDay((d) => shiftDay(d, 1))}
-            disabled={day >= today}
-            accessibilityLabel="Next day"
-            className="h-9 w-9 items-center justify-center rounded-lg border border-gray-200 disabled:opacity-30"
-          >
-            <Ionicons name="chevron-forward" size={18} color="#374151" />
-          </Pressable>
-          {day !== today && (
-            <Pressable
-              onPress={() => setDay(today)}
-              className="h-9 items-center justify-center rounded-lg px-3.5"
-              style={{ backgroundColor: '#EFF6FF' }}
-            >
-              <Text className="text-[13px] font-semibold text-blue-700">Today</Text>
-            </Pressable>
-          )}
+          <DateFilterButton
+            dropdown
+            from={isToday ? '' : range.from}
+            to={isToday ? '' : range.to}
+            idleLabel="Today"
+            onApply={applyRange}
+            shortcuts={[{ label: 'Today', on: isToday, onSelect: () => setRange({ from: today, to: today }) }]}
+          />
           <NewEntryMenu basePath={basePath} />
         </>
       ),
     },
-    [day, today, basePath, mainDate, otherDate]
+    [range, isToday, today, basePath]
   );
 
+  const loaded = !(isLoading && !transactions);
+
   return (
+    <View className="flex-1 bg-gray-50">
     <ScrollView
-      className="flex-1 bg-gray-50"
-      contentContainerStyle={{ padding: wide ? 24 : 12, paddingTop: wide ? 24 : 12, paddingBottom: 48, gap: 14 }}
+      className="flex-1"
+      contentContainerStyle={{ padding: wide ? 24 : 12, paddingTop: wide ? 24 : 12, paddingBottom: 96, gap: 14 }}
     >
       {toolbar}
 
@@ -993,15 +1137,6 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
         <Text className="px-1 text-sm text-gray-500">Loading…</Text>
       ) : (
         <>
-          <View className="flex-row flex-wrap" style={{ gap: 10 }}>
-            <Stat label="Opening" value={book.opening} color="#374151" />
-            <Stat label="Cash in" value={book.totalIn} color="#047857" />
-            <Stat label="Cash out" value={book.totalOut} color="#B91C1C" />
-            <Stat label="Closing" value={book.closing} color={book.closing >= 0 ? '#2563EB' : '#DC2626'} />
-            {book.totalSales > 0 && <Stat label="Sales billed" value={book.totalSales} color={MONEY.in.text} />}
-            {book.totalPurchases > 0 && <Stat label="Purchases billed" value={book.totalPurchases} color={MONEY.out.text} />}
-          </View>
-
           <DayBookTable
             rows={book.rows}
             opening={book.opening}
@@ -1009,22 +1144,28 @@ export function DayBookScreen({ basePath }: { basePath: string }) {
             totalOut={book.totalOut}
             closing={book.closing}
             full={fullTable}
+            dayLabel={singleDay ? undefined : dayLabel}
             onOpenRow={(row) => row.edit && setEditing(row.edit)}
           />
 
           <EditEntryModal target={editing} onClose={() => setEditing(null)} />
 
           {book.entryCount === 0 && (
-            <Text className="px-1 text-[13px] text-gray-500">No entries on this day.</Text>
+            <Text className="px-1 text-[13px] text-gray-500">
+              {`No ${book.selected ? `${book.selected.name} entries` : 'entries'} ${singleDay ? 'on this day.' : 'in this period.'}`}
+            </Text>
           )}
 
-          <Text className="px-1 text-[11.5px] leading-[17px] text-gray-400">
-            Tap any entry to edit, save or delete it. Sale and purchase bills show what was billed that day - they
-            don't change the balance until the money is received or paid, which appears as its own Cash in or Paid
-            out row.
+          <Text className="px-1 text-xs leading-[17px] text-gray-500">
+            Tap any entry to edit, save or delete it. The button at the bottom picks Cash, Esewa, a bank or all
+            accounts - a transfer shows under an account as money in or out. Sale and purchase bills show what was billed that day - they
+            don't change the balance until the money is received or paid, which appears as its own Received or Payment
+            Out row.
           </Text>
         </>
       )}
     </ScrollView>
+    {loaded && <AccountPicker options={book.accountOptions} selected={book.selected?.key ?? null} onSelect={setSelectedAccount} />}
+    </View>
   );
 }
