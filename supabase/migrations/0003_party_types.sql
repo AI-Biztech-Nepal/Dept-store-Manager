@@ -31,9 +31,16 @@ drop policy if exists party_types_admin_all on public.party_types;
 create policy party_types_admin_all on public.party_types
   for all using (public.finance_is_admin()) with check (public.finance_is_admin());
 
-drop trigger if exists party_types_stamp_owner on public.party_types;
-create trigger party_types_stamp_owner before insert on public.party_types
-  for each row execute function public.finance_stamp_owner();
+-- Fills owner_id in on insert when the app leaves it out. Only where 0001 created that function.
+do $$
+begin
+  if to_regprocedure('public.finance_stamp_owner()') is not null then
+    drop trigger if exists party_types_stamp_owner on public.party_types;
+    create trigger party_types_stamp_owner before insert on public.party_types
+      for each row execute function public.finance_stamp_owner();
+  end if;
+end
+$$;
 
 alter table public.customers
   add column if not exists party_type_id uuid references public.party_types(id) on delete set null;

@@ -18,8 +18,9 @@ const MAX_NAME_LENGTH = 30;
  * type in it and tapping the box selects it, so it works the same as on a new party.
  *
  * The form is told the chosen type's id, or null while what is typed is not a type
- * (yet), so "required" always means a real type was picked or added. Renders nothing
- * when the types can't be loaded, so a form never breaks over an optional label.
+ * (yet), so "required" always means a real type was picked or added. When the types can't
+ * be loaded the box still shows, disabled with a note, and the form saves without a type
+ * (it only asks for one once types exist), so a form never breaks over an optional label.
  */
 export function PartyTypeField({
   ownerId,
@@ -46,7 +47,24 @@ export function PartyTypeField({
   const pressing = useRef(false);
   const caps = useCaps();
 
-  if (!available) return null;
+  if (!available) {
+    return (
+      <View className="mb-2.5">
+        <Text className="mb-1.5 text-xs font-semibold text-gray-600">Ledger type</Text>
+        <TextInput
+          editable={false}
+          placeholder={caps ? 'TYPE A LEDGER TYPE' : 'Type a ledger type'}
+          placeholderTextColor="#9CA3AF"
+          accessibilityLabel="Ledger type"
+          className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-900"
+        />
+        <Text className="mt-1.5 text-[11px] leading-[15px] text-gray-400">
+          Ledger types aren’t set up in the database yet - run 0003_party_types.sql once in Supabase. Until then a
+          party saves without a type.
+        </Text>
+      </View>
+    );
+  }
 
   const current = types.find((t) => t.id === value);
   const shown = text ?? current?.name ?? '';
