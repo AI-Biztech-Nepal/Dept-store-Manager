@@ -12,10 +12,8 @@ export interface WebNavItem {
   // Sub-links shown nested under this item - for a section like Finance with
   // several destinations (Day Book, Ledger, Report, ...) that would otherwise
   // mean going back to a dashboard and re-picking a shortcut tile every time.
-  // A top-level item's children are always visible. A child can have its own
-  // children too (e.g. Report's family of report types under Finance); that
-  // group gets a chevron button to expand and collapse it, indented one step
-  // further each level down.
+  // A row with children (e.g. Report's family of report types) gets a chevron
+  // button to expand and collapse them, indented one step further each level down.
   children?: WebNavItem[];
 }
 
@@ -26,17 +24,17 @@ function containsActive(item: WebNavItem, isActive: (href: string) => boolean): 
 
 /** One row of the nav list, indented by how deep it sits (0 = Home/Finance,
  * 1 = Finance's own children, 2 = a child's own children, ...), and its
- * children drawn the same way one level deeper. Below the top level, a row
- * that has children (Report) carries a chevron button that expands and
- * collapses them; it starts closed and opens by itself when it or one of its
- * children is the page that is open. Defined outside WebSidebarShell so its
+ * children drawn the same way one level deeper. A row that has children
+ * (Report) carries a chevron button that expands and collapses them; it
+ * starts closed and opens by itself when it or one of its children is the page
+ * that is open. Defined outside WebSidebarShell so its
  * identity is stable across renders - an inline component here would remount
  * this whole branch (and its children) on every render instead of just
  * updating it. */
 function NavRow({ item, depth, isActive }: { item: WebNavItem; depth: number; isActive: (href: string) => boolean }) {
   const active = isActive(item.href);
   const top = depth === 0;
-  const collapsible = !top && !!item.children?.length;
+  const collapsible = !!item.children?.length;
   const insideOpen = containsActive(item, isActive);
   const [open, setOpen] = useState(insideOpen);
   // Landing on this group (a link from the Report page, the browser's back

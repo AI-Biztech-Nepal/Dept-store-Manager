@@ -14,7 +14,7 @@ import { ENTRY_KINDS } from '../../lib/components/finance/entryKinds';
 const DAYBOOK_ENTRY_KEYS = new Set(ENTRY_KINDS.map((kind) => kind.key));
 
 // The order Finance's pages run down the side panel. Anything not named here goes after them.
-const FINANCE_NAV_ORDER = ['daybook', 'customers', 'transactions', 'inventory', 'report', 'bank-accounts'];
+const FINANCE_NAV_ORDER = ['daybook', 'customers', 'transactions', 'inventory', 'bank-accounts', 'report'];
 const financeNavRank = (key: string) => {
   const i = FINANCE_NAV_ORDER.indexOf(key);
   return i === -1 ? FINANCE_NAV_ORDER.length : i;
