@@ -10,11 +10,14 @@ import { FINANCE_ENTRY_ACCENT } from './entryTheme';
  * outside) leaves the bill line exactly as it was typed. Enter walks Name >
  * Cost rate > Save, so it stays usable from the keyboard. */
 export function AddStockItemDialog({
+  sale,
   initialName,
   initialRate,
   onSave,
   onCancel,
 }: {
+  /** From a Sale the rate is a selling price and the quantity comes off the stock; from a Purchase, a cost and it goes on. */
+  sale?: boolean;
   initialName: string;
   initialRate: string;
   onSave: (name: string, rate: string) => void;
@@ -59,7 +62,9 @@ export function AddStockItemDialog({
         >
           <Text className="text-lg font-extrabold text-gray-900">Add new stock item</Text>
           <Text className="mt-1 text-sm text-gray-500">
-            It is added to your Inventory with 0 in stock. This bill&apos;s quantity is added when you save the bill.
+            {sale
+              ? "It is added to your Inventory with 0 in stock. This bill's quantity is taken off when you save the bill."
+              : "It is added to your Inventory with 0 in stock. This bill's quantity is added when you save the bill."}
           </Text>
 
           <Text className="mb-1.5 mt-4 text-xs font-semibold text-gray-600">Item name</Text>
@@ -74,7 +79,9 @@ export function AddStockItemDialog({
             accessibilityLabel="Item name"
           />
 
-          <Text className="mb-1.5 mt-3 text-xs font-semibold text-gray-600">Cost rate (NPR) - optional</Text>
+          <Text className="mb-1.5 mt-3 text-xs font-semibold text-gray-600">
+            {sale ? 'Selling rate (NPR) - optional' : 'Cost rate (NPR) - optional'}
+          </Text>
           <KeyInput
             value={rate}
             onChangeText={setRate}
@@ -85,7 +92,7 @@ export function AddStockItemDialog({
             placeholder="0"
             numeric
             align="right"
-            accessibilityLabel="Cost rate"
+            accessibilityLabel={sale ? 'Selling rate' : 'Cost rate'}
           />
 
           <View className="mt-5 flex-row" style={{ gap: 10 }}>

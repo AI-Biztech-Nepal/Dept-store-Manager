@@ -9,8 +9,8 @@ import { WebSidebarShell, WEB_SIDEBAR_MIN_WIDTH, type WebNavItem } from '../../l
 import { shortcuts as financeShortcuts } from '../../lib/components/finance/FinanceDashboardScreen';
 import { ENTRY_KINDS } from '../../lib/components/finance/entryKinds';
 
-// Received, Payment Out, Sales, Purchase and Expenses are already reachable from the Day Book's
-// "New entry" menu, so the side panel doesn't repeat them.
+// Received, Payment Out, Sales, Purchase and Expenses are already reachable from the cards in the
+// Day Book's title row, so the side panel doesn't repeat them.
 const DAYBOOK_ENTRY_KEYS = new Set(ENTRY_KINDS.map((kind) => kind.key));
 
 // The order Finance's pages run down the side panel. Anything not named here goes after them.
@@ -32,22 +32,17 @@ const REPORT_FAMILY: WebNavItem[] = [
 
 // On web the sections sit in a persistent left rail (see WebSidebarShell),
 // reusing the Finance dashboard's own shortcut list so the two never drift.
-const NAV_ITEMS: WebNavItem[] = [
-  {
-    href: '/(store)/finance',
-    label: 'Dashboard',
-    icon: 'wallet',
-    children: financeShortcuts('/(store)')
-      .filter((s) => !DAYBOOK_ENTRY_KEYS.has(s.key))
-      .sort((a, b) => financeNavRank(a.key) - financeNavRank(b.key))
-      .map((s) => ({
-        href: s.href,
-        label: s.label,
-        icon: s.icon,
-        ...(s.key === 'report' ? { children: REPORT_FAMILY } : null),
-      })),
-  },
-];
+// There is no "Dashboard" row of its own above them - the dashboard is the page
+// a sign-in opens on, and these pages are the rail.
+const NAV_ITEMS: WebNavItem[] = financeShortcuts('/(store)')
+  .filter((s) => !DAYBOOK_ENTRY_KEYS.has(s.key))
+  .sort((a, b) => financeNavRank(a.key) - financeNavRank(b.key))
+  .map((s) => ({
+    href: s.href,
+    label: s.label,
+    icon: s.icon,
+    ...(s.key === 'report' ? { children: REPORT_FAMILY } : null),
+  }));
 
 const HIDDEN: [string, string][] = [
   ['customers', 'Ledger'],

@@ -1,5 +1,5 @@
 // lib/components/finance/InventoryScreen.tsx
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { View, Text, TextInput, Pressable, Modal, ScrollView } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -172,8 +172,11 @@ export function InventoryScreen() {
     filters: userId ? { owner_id: userId } : {},
     enabled: !!userId,
   });
+  // Every bill, not just the first 1000: sold / purchased (and the stock worked
+  // out from them for items not yet on the shelf) add up all of them.
   const { data: transactions } = useSupabaseQuery('business_transactions', {
     filters: userId ? { owner_id: userId } : {},
+    all: true,
     enabled: !!userId,
   });
   const createProduct = useSupabaseInsert('products');
@@ -282,6 +285,37 @@ export function InventoryScreen() {
       (a, b) => Number(hasStock(b)) - Number(hasStock(a)) || a.name.localeCompare(b.name)
     );
   }, [products, financeItems, transactions]);
+
+  // An item that was only ever typed into bills ("Bills only") is moved onto the
+  // shelf as a real product, with the stock and cost worked out from those
+  // bills, so everything in Inventory is tracked the same way. Bills now create
+  // their products when they are saved, so this only picks up older ones. It
+  // waits until all three lists have loaded, tries once per visit, and a failure
+  // (or an item that is already there) just leaves the row as it was.
+  const promotedOnce = useRef(false);
+  useEffect(() => {
+    if (promotedOnce.current || !userId || !products || !financeItems || !transactions) return;
+    const billsOnly = rows.filter((r) => r.estimated && !r.product);
+    if (billsOnly.length === 0) return;
+    promotedOnce.current = true;
+    (async () => {
+      for (const r of billsOnly) {
+        try {
+          await createProduct.mutateAsync({
+            owner_id: userId,
+            name: r.name,
+            price: r.sold > 0 ? (r.price ?? 0) : 0,
+            purchase_price: r.cost != null ? Math.round(r.cost * 100) / 100 : null,
+            // Bought minus sold, exactly as the bills say - the stock trigger then
+            // keeps it right when any of those bills is edited or deleted.
+            stock_level: r.stockLevel ?? 0,
+          });
+        } catch {
+          // Duplicate name or no permission - it stays a "Bills only" row.
+        }
+      }
+    })();
+  }, [rows, products, financeItems, transactions, userId]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
