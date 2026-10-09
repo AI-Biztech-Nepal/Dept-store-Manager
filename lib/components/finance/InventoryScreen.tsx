@@ -275,7 +275,12 @@ export function InventoryScreen() {
       })
       .filter((r): r is InventoryRow => r !== null);
 
-    return [...productRows, ...financeItemRows].sort((a, b) => a.name.localeCompare(b.name));
+    // Items with stock on hand come first, then the ones that have run out;
+    // each group in alphabetical order.
+    const hasStock = (r: InventoryRow) => (r.stockLevel ?? 0) > 0;
+    return [...productRows, ...financeItemRows].sort(
+      (a, b) => Number(hasStock(b)) - Number(hasStock(a)) || a.name.localeCompare(b.name)
+    );
   }, [products, financeItems, transactions]);
 
   const filteredRows = useMemo(() => {

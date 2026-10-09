@@ -24,6 +24,7 @@ import { useAvailableAmounts, optionLabel } from '../../hooks/useAvailableAmount
 import { ExpenseEntryTable, type ExpenseEntryRow as ExpenseRow, type ExpenseEntryTableHandle } from './ExpenseEntryTable';
 import { KeyInput } from './KeyInput';
 import { useConfirmSave } from './ConfirmSave';
+import { AddStockItemDialog } from './AddStockItemDialog';
 import { TransactionsBook } from './TransactionsBook';
 import { BookTable, type BookColumn } from './BookKit';
 import { FINANCE_ENTRY_ACCENT, FINANCE_ENTRY_SHADOW } from './entryTheme';
@@ -633,6 +634,9 @@ function TransactionForm({
   );
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
+  // The "Add new stock item" popup opened from the desktop item dropdown: which
+  // row asked for it, and the name / rate typed there so far.
+  const [addStockFor, setAddStockFor] = useState<{ index: number; name: string; rate: string } | null>(null);
 
   // Discount is typed as a plain NPR amount (its % is only ever a derived
   // read-out); VAT is typed as a percentage (defaulting to Nepal's standard
@@ -823,6 +827,24 @@ function TransactionForm({
       if (/duplicate key/i.test(msg)) return;
       showAlert('Added to this bill, but could not add it to your stock', msg);
     }
+  }
+
+  // Save on the popup: the line takes the item (quantity 1 unless one was typed)
+  // and the caret moves on to Qty; the item itself is created in the background.
+  function saveNewStockItem(name: string, rate: string) {
+    if (!addStockFor) return;
+    const { index } = addStockFor;
+    setAddStockFor(null);
+    const row = items[index];
+    if (row) updateItem(index, { ...row, description: name, qty: row.qty.trim() ? row.qty : '1', rate });
+    setTimeout(() => itemsTableRef.current?.focusRow(index, 1), 80);
+    void addStockItem(name, rate);
+  }
+  // Cancel: nothing is created and the line stays as typed, caret back in it.
+  function cancelNewStockItem() {
+    const index = addStockFor?.index;
+    setAddStockFor(null);
+    if (index != null) setTimeout(() => itemsTableRef.current?.focusRow(index, 0), 80);
   }
 
   // Typing a brand-new item used to only ever add it to this one bill's
@@ -1634,7 +1656,7 @@ function TransactionForm({
               onUpdate={updateItem}
               onRemove={removeItem}
               onRequestSave={handleSave}
-              onAddStockItem={type === 'purchase' ? addStockItem : undefined}
+              onAddStockItem={type === 'purchase' ? (name, rate, index) => setAddStockFor({ index, name, rate }) : undefined}
               showHsCode={type === 'purchase'}
               onExit={() => discountRef.current?.focus()}
               footer={
@@ -1682,7 +1704,7 @@ function TransactionForm({
                               setTimeout(() => (discountRef.current as unknown as HTMLInputElement | null)?.select?.(), 0);
                             }}
                             inputRef={discountRef}
-                            onEnter={() => vatRef.current?.focus()}
+                            onEnter={() => (showVat ? vatRef : remarkRef).current?.focus()}
                             onRequestSave={handleSave}
                             accent={accent}
                             numeric
@@ -1724,37 +1746,71 @@ function TransactionForm({
                         </Text>
                       </View>
                     </View>
-                    <View className="flex-row items-center justify-between py-1">
-                      <Text className="text-[13px] text-gray-500">VAT (%)</Text>
-                      <View className="flex-row items-center" style={{ gap: 8 }}>
-                        <View style={{ width: 84 }}>
-                          <KeyInput
-                            value={vatPercent}
-                            onChangeText={setVatPercent}
-                            inputRef={vatRef}
-                            onEnter={() => remarkRef.current?.focus()}
-                            onRequestSave={handleSave}
-                            accent={accent}
-                            numeric
-                            align="right"
-                            accessibilityLabel="VAT percent"
-                            className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-gray-900"
-                          />
+                    {showVat ? (
+                      <View className="flex-row items-center justify-between py-1">
+                        <View className="flex-row items-center" style={{ gap: 6 }}>
+                          <Text className="text-[13px] text-gray-500">VAT (%)</Text>
+                          <Pressable
+                            onPress={() => {
+                              setShowVat(false);
+                              setVatPercent('0');
+                            }}
+                            tabIndex={-1}
+                            hitSlop={6}
+                            accessibilityLabel="Remove VAT"
+                          >
+                            <Ionicons name="close-circle" size={14} color="#9CA3AF" />
+                          </Pressable>
                         </View>
-                        <Pressable
-                          onPress={() => setVatPercent('13')}
-                          tabIndex={-1}
-                          className="items-center rounded-md border border-gray-300 bg-white px-1.5 py-0.5"
-                          style={{ width: 42 }}
-                          accessibilityLabel="Use standard 13 percent VAT"
-                        >
-                          <Text className="text-[11px] font-semibold text-gray-500">13%</Text>
-                        </Pressable>
-                        <Text className="text-right text-[13px] font-semibold text-gray-700" style={{ width: 70 }}>
-                          + {vatAmount.toLocaleString()}
-                        </Text>
+                        <View className="flex-row items-center" style={{ gap: 8 }}>
+                          <View style={{ width: 84 }}>
+                            <KeyInput
+                              value={vatPercent}
+                              onChangeText={setVatPercent}
+                              inputRef={vatRef}
+                              onEnter={() => remarkRef.current?.focus()}
+                              onRequestSave={handleSave}
+                              accent={accent}
+                              numeric
+                              align="right"
+                              accessibilityLabel="VAT percent"
+                              className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-gray-900"
+                            />
+                          </View>
+                          <Pressable
+                            onPress={() => setVatPercent('13')}
+                            tabIndex={-1}
+                            className="items-center rounded-md border border-gray-300 bg-white px-1.5 py-0.5"
+                            style={{ width: 42 }}
+                            accessibilityLabel="Use standard 13 percent VAT"
+                          >
+                            <Text className="text-[11px] font-semibold text-gray-500">13%</Text>
+                          </Pressable>
+                          <Text className="text-right text-[13px] font-semibold text-gray-700" style={{ width: 70 }}>
+                            + {vatAmount.toLocaleString()}
+                          </Text>
+                        </View>
                       </View>
-                    </View>
+                    ) : (
+                      // VAT is optional: a bill saves without it, and adding it starts
+                      // at Nepal's standard 13%, which can be typed over.
+                      <Pressable
+                        onPress={() => {
+                          setShowVat(true);
+                          setVatPercent((v) => (!v.trim() || Number(v) === 0 ? '13' : v));
+                          setTimeout(() => vatRef.current?.focus(), 50);
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Add VAT"
+                        className="flex-row items-center self-start py-1"
+                        style={{ gap: 5 }}
+                      >
+                        <Ionicons name="add-circle" size={14} color={accent} />
+                        <Text className="text-[13px] font-semibold" style={{ color: accent }}>
+                          Add VAT
+                        </Text>
+                      </Pressable>
+                    )}
                     <View className="mt-2 flex-row items-center justify-between border-t border-gray-300 pt-2.5">
                       <Text className="text-sm font-bold text-gray-900">G. Total</Text>
                       <Text className="text-xl font-extrabold" style={{ color: TYPE_META[type].color }}>
@@ -1796,6 +1852,15 @@ function TransactionForm({
         </View>
 
         {confirmDialog}
+
+        {addStockFor && (
+          <AddStockItemDialog
+            initialName={addStockFor.name}
+            initialRate={addStockFor.rate}
+            onSave={saveNewStockItem}
+            onCancel={cancelNewStockItem}
+          />
+        )}
 
         <ContactPickerModal
           visible={showPartyPicker}

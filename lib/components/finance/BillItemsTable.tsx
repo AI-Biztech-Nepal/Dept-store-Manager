@@ -42,9 +42,10 @@ interface Props {
   onRequestSave: () => void;
   /** When set, a name that isn't a stock item yet gets an "Add as new stock
    * item" row at the bottom of the dropdown; choosing it calls this with the
-   * name and the rate typed so far. The owner creates the item and reports
-   * any failure - the row is already filled in by then. */
-  onAddStockItem?: (name: string, rate: string) => void;
+   * name and rate typed so far and the row it was typed in. The owner shows
+   * its Save / Cancel popup and fills the row in (see `focusRow`) only if the
+   * item is saved - the row is left exactly as typed until then. */
+  onAddStockItem?: (name: string, rate: string, index: number) => void;
   /** Adds the HS Code column (Purchase only). */
   showHsCode?: boolean;
   /** Enter on the blank last row: the list is finished, move on (to Discount). */
@@ -252,10 +253,7 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
                 options={focusedItemIndex === index ? suggestionOptions : []}
                 onSelectOption={(opt, via) => {
                   if (opt.key === ADD_STOCK_ITEM_KEY) {
-                    const name = row.description.trim();
-                    onUpdate(index, { ...row, description: name, qty: row.qty.trim() ? row.qty : '1' });
-                    onAddStockItem?.(name, row.rate);
-                    if (via !== 'tab') focusCell(index, 1);
+                    onAddStockItem?.(row.description.trim(), row.rate, index);
                     return;
                   }
                   const s = suggestions.find((x) => x.key === opt.key);
