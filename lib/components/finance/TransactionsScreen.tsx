@@ -605,6 +605,7 @@ function TransactionForm({
     enabled: !!userId,
   });
   const createFinanceItem = useSupabaseUpsert('finance_items', 'owner_id,name');
+  const createProduct = useSupabaseInsert('products');
   const phoneContacts = usePhoneContacts();
   const { scanning, pickAndScan } = useScanBill();
   // Pre-fills the party picker's search box with whatever name Scan Bill
@@ -796,21 +797,48 @@ function TransactionForm({
     setShowItemPicker(false);
     setEditingItemIndex(null);
   }
+  // A purchase brings stock in, so an item it names that isn't on the shelf
+  // yet becomes a real product (the shelf is what the stock trigger moves -
+  // 0002_profiles_inventory.sql - and a bill line only counts toward stock
+  // when its name matches a product). It starts at 0: the trigger adds this
+  // bill's own quantity when the bill is saved, so seeding it with the
+  // quantity here would count it twice. The rate on a purchase is what it
+  // cost, so it goes in as the cost price, not the selling price.
+  async function addStockItem(name: string, rate: string) {
+    try {
+      await createProduct.mutateAsync({
+        owner_id: userId,
+        name,
+        price: 0,
+        purchase_price: Number(rate) > 0 ? Number(rate) : null,
+        stock_level: 0,
+      });
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      // Already on the shelf under this name (the list was just out of date) -
+      // the bill line matches it by name, so there is nothing left to do.
+      if (/duplicate key/i.test(msg)) return;
+      showAlert('Added to this bill, but could not add it to your stock', msg);
+    }
+  }
+
   // Typing a brand-new item used to only ever add it to this one bill's
   // line items, invisibly to the catalog - the next time "Pick from your
   // stock" opened, that same name wouldn't show up, since nothing was ever
-  // saved anywhere. `products` isn't the right place either - a reseller
-  // can only add a row there by stocking an admin-approved catalog item
-  // (products_insert_seller_from_catalog, 0015_product_catalog.sql), not by
-  // typing an arbitrary name while billing - so this saves it to the
-  // separate, Finance-only finance_items table instead (0063), which has no
-  // such restriction.
+  // saved anywhere. On a purchase it is added to the stock (above); on a
+  // sale it is saved to the separate, Finance-only finance_items table
+  // instead, since selling something never stocked shouldn't create a
+  // product sitting at negative stock.
   async function handlePickCustomItem(name: string, rate: string) {
     const row: ItemRowState = { description: name, qty: '1', rate: rate.trim() };
     if (editingItemIndex != null) updateItem(editingItemIndex, row);
     else setItems((prev) => [...prev, row]);
     setShowItemPicker(false);
     setEditingItemIndex(null);
+    if (type === 'purchase') {
+      await addStockItem(name, rate);
+      return;
+    }
     try {
       await createFinanceItem.mutateAsync({ owner_id: userId, name, rate: Number(rate) || null });
     } catch (err) {
@@ -1599,6 +1627,7 @@ function TransactionForm({
               onUpdate={updateItem}
               onRemove={removeItem}
               onRequestSave={handleSave}
+              onAddStockItem={type === 'purchase' ? addStockItem : undefined}
               onExit={() => discountRef.current?.focus()}
               footer={
                 <View

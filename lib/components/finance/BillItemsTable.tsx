@@ -18,6 +18,7 @@ export interface BillItemsTableHandle {
 
 type Col = 0 | 1 | 2;
 const MAX_SUGGESTIONS = 6;
+const ADD_STOCK_ITEM_KEY = '__add-stock-item__';
 
 interface ItemSuggestion {
   key: string;
@@ -34,6 +35,11 @@ interface Props {
   onUpdate: (index: number, next: BillItemRow) => void;
   onRemove: (index: number) => void;
   onRequestSave: () => void;
+  /** When set, a name that isn't a stock item yet gets an "Add as new stock
+   * item" row at the bottom of the dropdown; choosing it calls this with the
+   * name and the rate typed so far. The owner creates the item and reports
+   * any failure - the row is already filled in by then. */
+  onAddStockItem?: (name: string, rate: string) => void;
   /** Enter on the blank last row: the list is finished, move on (to Discount). */
   onExit: () => void;
   /** Rendered inside the card under the rows (the totals band). */
@@ -53,7 +59,7 @@ function cleanNumber(v: string): string {
 }
 
 export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function BillItemsTable(
-  { items, products, financeItems, accent, onUpdate, onRemove, onRequestSave, onExit, footer },
+  { items, products, financeItems, accent, onUpdate, onRemove, onRequestSave, onAddStockItem, onExit, footer },
   ref
 ) {
   const inputRefs = useRef<Record<string, TextInput | null>>({});
@@ -103,10 +109,16 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
     return matches.slice(0, MAX_SUGGESTIONS);
   }, [focusedItemIndex, items, catalog]);
 
-  const suggestionOptions = useMemo<SuggestOption[]>(
-    () => suggestions.map((s) => ({ key: s.key, label: s.name, hint: s.hint })),
-    [suggestions]
-  );
+  const suggestionOptions = useMemo<SuggestOption[]>(() => {
+    const options: SuggestOption[] = suggestions.map((s) => ({ key: s.key, label: s.name, hint: s.hint }));
+    const typed = focusedItemIndex != null ? (items[focusedItemIndex]?.description.trim() ?? '') : '';
+    // Only a real product counts as "already in stock" - a name that was merely
+    // typed into an earlier bill (financeItems) can still be promoted here.
+    if (onAddStockItem && typed && !products.some((p) => p.name.trim().toLowerCase() === typed.toLowerCase())) {
+      options.push({ key: ADD_STOCK_ITEM_KEY, label: `Add "${typed}" as new stock item`, kind: 'add' });
+    }
+    return options;
+  }, [suggestions, focusedItemIndex, items, products, onAddStockItem]);
 
   function focusCell(index: number, col: Col) {
     inputRefs.current[`${index}:${col}`]?.focus();
@@ -204,6 +216,13 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
                 onChangeText={(v) => onUpdate(index, { ...row, description: v })}
                 options={focusedItemIndex === index ? suggestionOptions : []}
                 onSelectOption={(opt, via) => {
+                  if (opt.key === ADD_STOCK_ITEM_KEY) {
+                    const name = row.description.trim();
+                    onUpdate(index, { ...row, description: name, qty: row.qty.trim() ? row.qty : '1' });
+                    onAddStockItem?.(name, row.rate);
+                    if (via !== 'tab') focusCell(index, 1);
+                    return;
+                  }
                   const s = suggestions.find((x) => x.key === opt.key);
                   if (!s) return;
                   onUpdate(index, {
