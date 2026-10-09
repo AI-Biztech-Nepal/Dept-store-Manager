@@ -101,7 +101,19 @@ export function useAuthListener() {
       if (event === 'SIGNED_OUT') setRecovering(false);
       setSession(session);
       if (session?.user) {
-        loadProfile(session.user.id);
+        const profileLoaded = loadProfile(session.user.id);
+        // A page refresh (the session is restored from storage): keep the app on its
+        // spinner until the profile is in. Mounted earlier, the signed-in screens lose
+        // the page the address points at, and every refresh landed on the dashboard.
+        // A slow or failed fetch holds the spinner for a few seconds at most.
+        if (event === 'INITIAL_SESSION') {
+          const release = () => {
+            if (isMounted) setLoading(false);
+          };
+          profileLoaded.finally(release);
+          setTimeout(release, 8000);
+          return;
+        }
       } else {
         setProfile(null);
       }
