@@ -34,6 +34,8 @@ interface Props {
   /** Small indicator drawn inside the right edge of the box. */
   adornment?: ReactNode;
   adornmentWidth?: number;
+  /** One text size down in the suggestion list (the box's own size comes from `inputClassName`). */
+  compact?: boolean;
 }
 
 /** A text box with a typeahead list that is fully driven from the keyboard:
@@ -57,6 +59,7 @@ export function SuggestInput({
   inputStyle,
   adornment,
   adornmentWidth = 0,
+  compact,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [index, setIndex] = useState(-1);
@@ -165,16 +168,20 @@ export function SuggestInput({
               {o.kind === 'add' ? (
                 <>
                   <Ionicons name="add-circle" size={16} color={accent} />
-                  <Text className="ml-2 flex-1 text-sm font-semibold" style={{ color: accent }} numberOfLines={1}>
+                  <Text
+                    className={`ml-2 flex-1 font-semibold ${compact ? 'text-xs' : 'text-sm'}`}
+                    style={{ color: accent }}
+                    numberOfLines={1}
+                  >
                     {o.label}
                   </Text>
                 </>
               ) : (
-                <Text className="flex-1 text-sm text-gray-900" numberOfLines={1}>
+                <Text className={`flex-1 text-gray-900 ${compact ? 'text-xs' : 'text-sm'}`} numberOfLines={1}>
                   {o.label}
                 </Text>
               )}
-              {!!o.hint && <Text className="ml-2 text-[11px] text-gray-400">{o.hint}</Text>}
+              {!!o.hint && <Text className={`ml-2 text-gray-400 ${compact ? 'text-[10px]' : 'text-[11px]'}`}>{o.hint}</Text>}
             </Pressable>
           ))}
         </View>

@@ -100,6 +100,7 @@ export function KeyboardDateInput({
   onEnter,
   onRequestSave,
   accent,
+  compact,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -107,6 +108,8 @@ export function KeyboardDateInput({
   onEnter?: () => void;
   onRequestSave?: () => void;
   accent: string;
+  /** One text size down - the box and the line of helper text under it. */
+  compact?: boolean;
 }) {
   const [mode] = useCalendarMode();
   const [focused, setFocused] = useState(false);
@@ -192,7 +195,7 @@ export function KeyboardDateInput({
               placeholder="Select a date"
               placeholderTextColor="#9CA3AF"
               accessibilityLabel="Date"
-              className="rounded-lg border bg-white py-2.5 pl-3 pr-10 text-sm font-semibold text-gray-900"
+              className={`rounded-lg border bg-white py-2.5 pl-3 pr-10 font-semibold text-gray-900 ${compact ? 'text-xs' : 'text-sm'}`}
               style={[
                 { borderColor: invalid ? '#DC2626' : focused ? accent : '#D1D5DB' },
                 focused ? { boxShadow: `0 0 0 3px ${invalid ? '#DC262629' : `${accent}29`}` } : null,
@@ -209,7 +212,7 @@ export function KeyboardDateInput({
               <Ionicons name="calendar-outline" size={17} color="#6B7280" />
             </Pressable>
           </View>
-          <Text className="mt-1.5 text-xs" style={{ color: invalid ? '#DC2626' : '#9CA3AF' }} numberOfLines={1}>
+          <Text className={`mt-1.5 ${compact ? 'text-[11px]' : 'text-xs'}`} style={{ color: invalid ? '#DC2626' : '#9CA3AF' }} numberOfLines={1}>
             {helper}
           </Text>
         </View>

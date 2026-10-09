@@ -46,8 +46,6 @@ interface Props {
    * its Save / Cancel popup and fills the row in (see `focusRow`) only if the
    * item is saved - the row is left exactly as typed until then. */
   onAddStockItem?: (name: string, rate: string, index: number) => void;
-  /** Adds the HS Code column (Purchase only). */
-  showHsCode?: boolean;
   /** Enter on the blank last row: the list is finished, move on (to Discount). */
   onExit: () => void;
   /** Rendered inside the card under the rows (the totals band). */
@@ -67,7 +65,7 @@ function cleanNumber(v: string): string {
 }
 
 export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function BillItemsTable(
-  { items, products, financeItems, accent, onUpdate, onRemove, onRequestSave, onAddStockItem, showHsCode, onExit, footer },
+  { items, products, financeItems, accent, onUpdate, onRemove, onRequestSave, onAddStockItem, onExit, footer },
   ref
 ) {
   const inputRefs = useRef<Record<string, TextInput | null>>({});
@@ -165,8 +163,8 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
     ];
   }
 
-  const cellClass = 'rounded-lg px-2.5 py-2.5 text-sm text-gray-900';
-  const headClass = 'px-2.5 text-[11px] font-bold uppercase tracking-wider text-gray-500';
+  const cellClass = 'rounded-lg px-2.5 py-2.5 text-xs text-gray-900';
+  const headClass = 'px-2.5 text-[10px] font-bold uppercase tracking-wider text-gray-500';
   const filled = items.filter((r) => !isBlank(r)).length;
 
   return (
@@ -179,22 +177,20 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
       <View className="flex-row items-center justify-between px-5 pb-3 pt-4">
         <View className="flex-row items-center gap-2">
           <Ionicons name="cube-outline" size={14} color="#6B7280" />
-          <Text className="text-[11px] font-bold uppercase tracking-wider text-gray-500">Items</Text>
+          <Text className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Items</Text>
         </View>
-        <Text className="text-xs text-gray-400">
+        <Text className="text-[11px] text-gray-400">
           {filled} {filled === 1 ? 'item' : 'items'}
         </Text>
       </View>
 
       <View className="flex-row items-center border-y border-gray-200 bg-gray-50 px-2 py-2">
-        <Text className="text-center text-[11px] font-bold uppercase tracking-wider text-gray-500" style={{ width: 36 }}>
+        <Text className="text-center text-[10px] font-bold uppercase tracking-wider text-gray-500" style={{ width: 36 }}>
           #
         </Text>
-        {showHsCode && (
-          <Text className={headClass} style={{ width: HS_COL_WIDTH }}>
-            HS Code
-          </Text>
-        )}
+        <Text className={headClass} style={{ width: HS_COL_WIDTH }}>
+          HS Code
+        </Text>
         <Text className={headClass} style={{ flex: 1 }}>
           Item
         </Text>
@@ -220,31 +216,29 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
             className="flex-row items-center border-b border-gray-100 px-2 py-0.5"
             style={{ backgroundColor: rowFocused ? `${accent}0D` : 'transparent', zIndex: rowFocused ? 5 : 0 }}
           >
-            <Text className="text-center text-[13px] font-semibold text-gray-400" style={{ width: 36 }}>
+            <Text className="text-center text-xs font-semibold text-gray-400" style={{ width: 36 }}>
               {index + 1}
             </Text>
 
-            {showHsCode && (
-              <View style={{ width: HS_COL_WIDTH }}>
-                <TextInput
-                  ref={(el) => {
-                    inputRefs.current[`${index}:3`] = el;
-                  }}
-                  value={row.hsCode ?? ''}
-                  onChangeText={(v) => onUpdate(index, { ...row, hsCode: cleanNumber(v) })}
-                  onFocus={() => setFocusedCell({ index, col: 3 })}
-                  onBlur={() => setFocusedCell((cur) => (cur?.index === index && cur.col === 3 ? null : cur))}
-                  onKeyPress={(e) => handleKeyPress(e, index, 3)}
-                  placeholder="HS code"
-                  placeholderTextColor="#B2B8C1"
-                  keyboardType="numeric"
-                  accessibilityLabel={`HS code, row ${index + 1}`}
-                  selectTextOnFocus
-                  className={cellClass}
-                  style={cellStyle(index, 3)}
-                />
-              </View>
-            )}
+            <View style={{ width: HS_COL_WIDTH }}>
+              <TextInput
+                ref={(el) => {
+                  inputRefs.current[`${index}:3`] = el;
+                }}
+                value={row.hsCode ?? ''}
+                onChangeText={(v) => onUpdate(index, { ...row, hsCode: cleanNumber(v) })}
+                onFocus={() => setFocusedCell({ index, col: 3 })}
+                onBlur={() => setFocusedCell((cur) => (cur?.index === index && cur.col === 3 ? null : cur))}
+                onKeyPress={(e) => handleKeyPress(e, index, 3)}
+                placeholder="HS code"
+                placeholderTextColor="#B2B8C1"
+                keyboardType="numeric"
+                accessibilityLabel={`HS code, row ${index + 1}`}
+                selectTextOnFocus
+                className={cellClass}
+                style={cellStyle(index, 3)}
+              />
+            </View>
 
             <View style={{ flex: 1, minWidth: 0 }}>
               <SuggestInput
@@ -275,6 +269,7 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
                 placeholder={blank ? 'Item name…' : 'Item'}
                 accessibilityLabel={`Item, row ${index + 1}`}
                 accent={accent}
+                compact
                 inputClassName={cellClass}
                 inputStyle={cellStyle(index, 0)}
               />
@@ -321,7 +316,7 @@ export const BillItemsTable = forwardRef<BillItemsTableHandle, Props>(function B
             </View>
 
             <Text
-              className={`px-2.5 text-right text-sm font-bold ${amount > 0 ? 'text-gray-900' : 'text-gray-300'}`}
+              className={`px-2.5 text-right text-xs font-bold ${amount > 0 ? 'text-gray-900' : 'text-gray-300'}`}
               style={{ width: 130 }}
               numberOfLines={1}
             >

@@ -5,7 +5,7 @@ import { KeyboardAwareSectionList } from 'react-native-keyboard-aware-scroll-vie
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore, useRole } from '../../hooks/useAuth';
-import { useSupabaseInsert, useSupabaseQuery, useSupabaseRow, useSupabaseUpdate, useSupabaseUpsert, useSupabaseDelete } from '../../hooks/useSupabase';
+import { useSupabaseInsert, useSupabaseQuery, useSupabaseRow, useSupabaseUpdate, useSupabaseDelete } from '../../hooks/useSupabase';
 import { useBankAccounts } from '../../hooks/useBankAccounts';
 import { useScreenHeader } from '../../hooks/useScreenHeader';
 import { useIsWideWeb } from '../../hooks/useWideGrid';
@@ -606,7 +606,6 @@ function TransactionForm({
     filters: { owner_id: userId },
     enabled: !!userId,
   });
-  const createFinanceItem = useSupabaseUpsert('finance_items', 'owner_id,name');
   const createProduct = useSupabaseInsert('products');
   const phoneContacts = usePhoneContacts();
   const { scanning, pickAndScan } = useScanBill();
@@ -804,29 +803,37 @@ function TransactionForm({
     setShowItemPicker(false);
     setEditingItemIndex(null);
   }
-  // A purchase brings stock in, so an item it names that isn't on the shelf
-  // yet becomes a real product (the shelf is what the stock trigger moves -
-  // 0002_profiles_inventory.sql - and a bill line only counts toward stock
-  // when its name matches a product). It starts at 0: the trigger adds this
-  // bill's own quantity when the bill is saved, so seeding it with the
-  // quantity here would count it twice. The rate on a purchase is what it
-  // cost, so it goes in as the cost price, not the selling price.
-  async function addStockItem(name: string, rate: string) {
+  // An item a bill names that isn't on the shelf yet becomes a real product
+  // (the shelf is what the stock trigger moves - 0002_profiles_inventory.sql -
+  // and a bill line only counts toward stock when its name matches a product).
+  // It starts at 0: the trigger moves this bill's own quantity when the bill is
+  // saved (a purchase adds it, a sale takes it off - so a new item sold before
+  // it was ever bought shows a negative balance until stock is entered), and
+  // seeding it with the quantity here would count it twice.
+  // Resolves to why it failed, or null when the product was created or was
+  // already there.
+  async function createStockProduct(name: string, rate: string): Promise<string | null> {
+    const amount = Number(rate) > 0 ? Number(rate) : 0;
     try {
       await createProduct.mutateAsync({
         owner_id: userId,
         name,
-        price: 0,
-        purchase_price: Number(rate) > 0 ? Number(rate) : null,
+        // The rate on a sale is what it sells for; on a purchase, what it cost.
+        price: type === 'sale' ? amount : 0,
+        purchase_price: type === 'purchase' && amount > 0 ? amount : null,
         stock_level: 0,
       });
+      return null;
     } catch (err) {
       const msg = getErrorMessage(err);
       // Already on the shelf under this name (the list was just out of date) -
       // the bill line matches it by name, so there is nothing left to do.
-      if (/duplicate key/i.test(msg)) return;
-      showAlert('Added to this bill, but could not add it to your stock', msg);
+      return /duplicate key/i.test(msg) ? null : msg;
     }
+  }
+  async function addStockItem(name: string, rate: string) {
+    const problem = await createStockProduct(name, rate);
+    if (problem) showAlert('Added to this bill, but could not add it to your stock', problem);
   }
 
   // Save on the popup: the line takes the item (quantity 1 unless one was typed)
@@ -850,25 +857,15 @@ function TransactionForm({
   // Typing a brand-new item used to only ever add it to this one bill's
   // line items, invisibly to the catalog - the next time "Pick from your
   // stock" opened, that same name wouldn't show up, since nothing was ever
-  // saved anywhere. On a purchase it is added to the stock (above); on a
-  // sale it is saved to the separate, Finance-only finance_items table
-  // instead, since selling something never stocked shouldn't create a
-  // product sitting at negative stock.
+  // saved anywhere. It is now added to the stock (above), on a sale as well as
+  // a purchase.
   async function handlePickCustomItem(name: string, rate: string) {
     const row: ItemRowState = { description: name, qty: '1', rate: rate.trim() };
     if (editingItemIndex != null) updateItem(editingItemIndex, row);
     else setItems((prev) => [...prev, row]);
     setShowItemPicker(false);
     setEditingItemIndex(null);
-    if (type === 'purchase') {
-      await addStockItem(name, rate);
-      return;
-    }
-    try {
-      await createFinanceItem.mutateAsync({ owner_id: userId, name, rate: Number(rate) || null });
-    } catch (err) {
-      showAlert('Added to this bill, but could not save it for next time', getErrorMessage(err));
-    }
+    await addStockItem(name, rate);
   }
 
   async function handleSave() {
@@ -922,6 +919,18 @@ function TransactionForm({
           }
           setCustomerId(resolvedCustomerId);
         }
+        // Every item the bill names becomes a real product before the bill is
+        // saved, so the stock trigger can move it (it matches products by name,
+        // and an item typed straight into a line - not picked, not added through
+        // the popup - has none yet). Otherwise it would sit in Inventory as a
+        // "Bills only" estimate. A failure here doesn't block the bill.
+        const known = new Set(products.map((p) => p.name.trim().toLowerCase()));
+        for (const r of validItems) {
+          const name = r.description.trim();
+          if (!name || known.has(name.toLowerCase())) continue;
+          known.add(name.toLowerCase());
+          await createStockProduct(name, r.rate);
+        }
         const values = {
           type,
           amount: grandTotal,
@@ -946,25 +955,6 @@ function TransactionForm({
           await updateTx.mutateAsync({ id: initial.id, values });
         } else {
           await createTx.mutateAsync({ owner_id: userId, ...values });
-        }
-        // The typeahead lets an item be typed straight into the bill; one
-        // that isn't in the catalog yet is remembered for next time, like
-        // "Add as new item" in the picker popup does.
-        if (desktopWeb) {
-          const known = new Set([
-            ...products.map((p) => p.name.trim().toLowerCase()),
-            ...(financeItems ?? []).map((f) => f.name.trim().toLowerCase()),
-          ]);
-          for (const r of validItems) {
-            const name = r.description.trim();
-            if (!name || known.has(name.toLowerCase())) continue;
-            known.add(name.toLowerCase());
-            try {
-              await createFinanceItem.mutateAsync({ owner_id: userId, name, rate: Number(r.rate) || null });
-            } catch {
-              // The bill itself is saved - a failed remember-for-later isn't worth blocking on.
-            }
-          }
         }
         onDone();
       } catch (err) {
@@ -1524,7 +1514,7 @@ function TransactionForm({
               <View className="flex-row" style={{ gap: 14 }}>
                 <View style={{ flex: 1.7, minWidth: 0 }}>
                   <View className="mb-1.5 flex-row items-center justify-between">
-                    <Text className="text-xs font-semibold text-gray-600">{partyLabel}</Text>
+                    <Text className="text-[11px] font-semibold text-gray-600">{partyLabel}</Text>
                     {!!customerId && (
                       <Pressable
                         onPress={() => {
@@ -1576,7 +1566,8 @@ function TransactionForm({
                     accessibilityLabel={partyLabel}
                     autoFocus={!initial}
                     accent={accent}
-                    inputClassName="rounded-lg px-3 py-2.5 text-sm font-semibold text-gray-900"
+                    compact
+                    inputClassName="rounded-lg px-3 py-2.5 text-xs font-semibold text-gray-900"
                     inputStyle={[
                       { borderWidth: 1, borderColor: vendorFocused ? accent : '#D1D5DB', backgroundColor: '#FFFFFF' },
                       vendorFocused ? { boxShadow: `0 0 0 3px ${accent}29` } : null,
@@ -1593,7 +1584,7 @@ function TransactionForm({
                   />
                 </View>
                 <View style={{ flex: 0.8, minWidth: 0 }}>
-                  <Text className="mb-1.5 text-xs font-semibold text-gray-600">Bill No.</Text>
+                  <Text className="mb-1.5 text-[11px] font-semibold text-gray-600">Bill No.</Text>
                   <KeyInput
                     value={billNo}
                     onChangeText={setBillNo}
@@ -1603,10 +1594,11 @@ function TransactionForm({
                     accent={accent}
                     placeholder="e.g. 0234"
                     accessibilityLabel="Bill number"
+                    className="rounded-lg px-3 py-2.5 text-xs font-semibold text-gray-900"
                   />
                 </View>
                 <View style={{ flex: 1.1, minWidth: 0 }}>
-                  <Text className="mb-1.5 text-xs font-semibold text-gray-600">Bill date</Text>
+                  <Text className="mb-1.5 text-[11px] font-semibold text-gray-600">Bill date</Text>
                   <KeyboardDateInput
                     value={billDate}
                     onChange={setBillDate}
@@ -1614,6 +1606,7 @@ function TransactionForm({
                     accent={accent}
                     onEnter={() => itemsTableRef.current?.focusRow(0, 0)}
                     onRequestSave={handleSave}
+                    compact
                   />
                 </View>
               </View>
@@ -1635,7 +1628,7 @@ function TransactionForm({
                         setShowRenameParty(false);
                       }
                     }}
-                    className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+                    className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs text-gray-900"
                   />
                   <Pressable onPress={handleRenameParty} disabled={renamingParty} hitSlop={8}>
                     <Ionicons name="checkmark-circle" size={22} color="#059669" />
@@ -1656,8 +1649,7 @@ function TransactionForm({
               onUpdate={updateItem}
               onRemove={removeItem}
               onRequestSave={handleSave}
-              onAddStockItem={type === 'purchase' ? (name, rate, index) => setAddStockFor({ index, name, rate }) : undefined}
-              showHsCode={type === 'purchase'}
+              onAddStockItem={(name, rate, index) => setAddStockFor({ index, name, rate })}
               onExit={() => discountRef.current?.focus()}
               footer={
                 <View
@@ -1665,7 +1657,7 @@ function TransactionForm({
                   style={{ columnGap: 28, rowGap: 14, borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}
                 >
                   <View style={{ flex: 1, minWidth: 240 }}>
-                    <Text className="mb-1.5 text-xs font-semibold text-gray-600">Remarks</Text>
+                    <Text className="mb-1.5 text-[11px] font-semibold text-gray-600">Remarks</Text>
                     <KeyInput
                       value={note}
                       onChangeText={setNote}
@@ -1675,17 +1667,17 @@ function TransactionForm({
                       accent={accent}
                       placeholder="Optional"
                       accessibilityLabel="Remarks"
-                      className="rounded-lg px-3 py-2.5 text-sm text-gray-900"
+                      className="rounded-lg px-3 py-2.5 text-xs text-gray-900"
                     />
                   </View>
 
                   <View style={{ width: 320 }}>
                     <View className="flex-row items-center justify-between py-1.5">
-                      <Text className="text-[13px] text-gray-500">Subtotal</Text>
-                      <Text className="text-[13px] font-semibold text-gray-700">NPR {subtotal.toLocaleString()}</Text>
+                      <Text className="text-xs text-gray-500">Subtotal</Text>
+                      <Text className="text-xs font-semibold text-gray-700">NPR {subtotal.toLocaleString()}</Text>
                     </View>
                     <View className="flex-row items-center justify-between py-1">
-                      <Text className="text-[13px] text-gray-500">{discountMode === 'percent' ? 'Discount (%)' : 'Discount (Rs)'}</Text>
+                      <Text className="text-xs text-gray-500">{discountMode === 'percent' ? 'Discount (%)' : 'Discount (Rs)'}</Text>
                       <View className="flex-row items-center" style={{ gap: 8 }}>
                         <View style={{ width: 84 }}>
                           <KeyInput
@@ -1711,7 +1703,7 @@ function TransactionForm({
                             align="right"
                             placeholder="0"
                             accessibilityLabel={discountMode === 'percent' ? 'Discount percent' : 'Discount in NPR'}
-                            className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-gray-900"
+                            className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-gray-900"
                           />
                         </View>
                         <View
@@ -1734,14 +1726,14 @@ function TransactionForm({
                                 className="flex-1 items-center py-0.5"
                                 style={{ backgroundColor: on ? accent : 'transparent' }}
                               >
-                                <Text className="text-[11px] font-bold" style={{ color: on ? '#fff' : '#6B7280' }}>
+                                <Text className="text-[10px] font-bold" style={{ color: on ? '#fff' : '#6B7280' }}>
                                   {label}
                                 </Text>
                               </Pressable>
                             );
                           })}
                         </View>
-                        <Text className="text-right text-[13px] font-semibold text-gray-700" style={{ width: 70 }}>
+                        <Text className="text-right text-xs font-semibold text-gray-700" style={{ width: 70 }}>
                           − {discountAmount.toLocaleString()}
                         </Text>
                       </View>
@@ -1749,7 +1741,7 @@ function TransactionForm({
                     {showVat ? (
                       <View className="flex-row items-center justify-between py-1">
                         <View className="flex-row items-center" style={{ gap: 6 }}>
-                          <Text className="text-[13px] text-gray-500">VAT (%)</Text>
+                          <Text className="text-xs text-gray-500">VAT (%)</Text>
                           <Pressable
                             onPress={() => {
                               setShowVat(false);
@@ -1774,7 +1766,7 @@ function TransactionForm({
                               numeric
                               align="right"
                               accessibilityLabel="VAT percent"
-                              className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-gray-900"
+                              className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-gray-900"
                             />
                           </View>
                           <Pressable
@@ -1784,9 +1776,9 @@ function TransactionForm({
                             style={{ width: 42 }}
                             accessibilityLabel="Use standard 13 percent VAT"
                           >
-                            <Text className="text-[11px] font-semibold text-gray-500">13%</Text>
+                            <Text className="text-[10px] font-semibold text-gray-500">13%</Text>
                           </Pressable>
-                          <Text className="text-right text-[13px] font-semibold text-gray-700" style={{ width: 70 }}>
+                          <Text className="text-right text-xs font-semibold text-gray-700" style={{ width: 70 }}>
                             + {vatAmount.toLocaleString()}
                           </Text>
                         </View>
@@ -1806,14 +1798,14 @@ function TransactionForm({
                         style={{ gap: 5 }}
                       >
                         <Ionicons name="add-circle" size={14} color={accent} />
-                        <Text className="text-[13px] font-semibold" style={{ color: accent }}>
+                        <Text className="text-xs font-semibold" style={{ color: accent }}>
                           Add VAT
                         </Text>
                       </Pressable>
                     )}
                     <View className="mt-2 flex-row items-center justify-between border-t border-gray-300 pt-2.5">
-                      <Text className="text-sm font-bold text-gray-900">G. Total</Text>
-                      <Text className="text-xl font-extrabold" style={{ color: TYPE_META[type].color }}>
+                      <Text className="text-xs font-bold text-gray-900">G. Total</Text>
+                      <Text className="text-lg font-extrabold" style={{ color: TYPE_META[type].color }}>
                         NPR {grandTotal.toLocaleString()}
                       </Text>
                     </View>
@@ -1825,7 +1817,7 @@ function TransactionForm({
             <View className="mt-4 flex-row flex-wrap items-center justify-end" style={{ gap: 16 }}>
               <View className="flex-row" style={{ gap: 10 }}>
                 <Pressable onPress={onCancel} className="items-center rounded-xl border border-gray-300 bg-white px-6 py-2.5">
-                  <Text className="text-sm font-semibold text-gray-600">Cancel</Text>
+                  <Text className="text-xs font-semibold text-gray-600">Cancel</Text>
                 </Pressable>
                 <Pressable
                   ref={saveButtonRef}
@@ -1834,7 +1826,7 @@ function TransactionForm({
                   className="items-center rounded-xl px-8 py-2.5 disabled:opacity-50"
                   style={{ backgroundColor: accent, boxShadow: `0 2px 6px ${accentShadow}` }}
                 >
-                  <Text className="text-sm font-bold text-white">{saving ? 'Saving…' : 'Save'}</Text>
+                  <Text className="text-xs font-bold text-white">{saving ? 'Saving…' : 'Save'}</Text>
                 </Pressable>
               </View>
             </View>
@@ -1855,6 +1847,7 @@ function TransactionForm({
 
         {addStockFor && (
           <AddStockItemDialog
+            sale={type === 'sale'}
             initialName={addStockFor.name}
             initialRate={addStockFor.rate}
             onSave={saveNewStockItem}
