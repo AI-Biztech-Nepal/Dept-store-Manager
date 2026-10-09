@@ -52,6 +52,7 @@ interface ItemRowState {
   description: string;
   qty: string;
   rate: string;
+  hsCode?: string;
 }
 
 let expenseRowSeq = 0;
@@ -626,7 +627,9 @@ function TransactionForm({
   const [billNo, setBillNo] = useState(initial?.bill_no ?? '');
   const [billDate, setBillDate] = useState(initial?.bill_date ?? todayIso());
   const [items, setItems] = useState<ItemRowState[]>(
-    initial ? initial.items.map((i) => ({ description: i.description, qty: String(i.qty), rate: String(i.rate) })) : []
+    initial
+      ? initial.items.map((i) => ({ description: i.description, qty: String(i.qty), rate: String(i.rate), hsCode: i.hs_code ?? '' }))
+      : []
   );
   const [showItemPicker, setShowItemPicker] = useState(false);
   const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
@@ -907,6 +910,7 @@ function TransactionForm({
             qty: Number(r.qty),
             rate: Number(r.rate),
             amount: Number(r.qty) * Number(r.rate),
+            ...(r.hsCode?.trim() ? { hs_code: r.hsCode.trim() } : {}),
           })),
           discount_amount: Math.round(discountAmount),
           vat_amount: vatAmount,
@@ -1312,7 +1316,7 @@ function TransactionForm({
   useEffect(() => {
     if (!desktopWeb || !isBill) return;
     const last = items[items.length - 1];
-    if (!last || last.description.trim() || last.qty.trim() || last.rate.trim()) {
+    if (!last || last.description.trim() || last.qty.trim() || last.rate.trim() || last.hsCode?.trim()) {
       setItems((prev) => [...prev, { description: '', qty: '', rate: '' }]);
     }
   }, [items, isBill, desktopWeb]);
@@ -1628,6 +1632,7 @@ function TransactionForm({
               onRemove={removeItem}
               onRequestSave={handleSave}
               onAddStockItem={type === 'purchase' ? addStockItem : undefined}
+              showHsCode={type === 'purchase'}
               onExit={() => discountRef.current?.focus()}
               footer={
                 <View
@@ -2218,7 +2223,7 @@ function TransactionRow({
 
 // The widths of the bill's item columns - the Total column is as wide as the Amount column
 // above it, so the sums line up under the figures they add up.
-const BILL_COL = { sn: 38, qty: 46, rate: 72, amount: 88 };
+const BILL_COL = { sn: 38, hs: 72, qty: 46, rate: 72, amount: 88 };
 
 /** One cell of the bill's item table. It is a View of its own so that its rule (the line on
  * its right edge - the last cell has none) shows the same everywhere - a border on a Text does
@@ -2314,6 +2319,8 @@ export function TransactionDetailModal({
   // sub-total, less the discount, plus the VAT.
   const subtotal = tx.items.reduce((sum, item) => sum + item.amount, 0);
   const showSubtotal = tx.items.length > 0 && (tx.discount_amount > 0 || tx.vat_amount > 0);
+  // Only bills that carry an HS code get the column, so older bills look as they did.
+  const showHsCode = tx.items.some((item) => !!item.hs_code);
   const hasBillNo = isBill && !!tx.bill_no;
 
   return (
@@ -2385,6 +2392,7 @@ export function TransactionDetailModal({
                     <BillCell head align="center" width={BILL_COL.sn}>
                       S.N.
                     </BillCell>
+                    {showHsCode && <BillCell head width={BILL_COL.hs}>HS Code</BillCell>}
                     <BillCell head>Item</BillCell>
                     <BillCell head align="right" width={BILL_COL.qty}>
                       Qty
@@ -2401,6 +2409,11 @@ export function TransactionDetailModal({
                       <BillCell align="center" width={BILL_COL.sn} textClass="text-gray-500">
                         {idx + 1}
                       </BillCell>
+                      {showHsCode && (
+                        <BillCell width={BILL_COL.hs} textClass="text-gray-500">
+                          {item.hs_code ?? ''}
+                        </BillCell>
+                      )}
                       <BillCell textClass="text-gray-900">{item.description}</BillCell>
                       <BillCell align="right" width={BILL_COL.qty}>
                         {item.qty}

@@ -141,6 +141,8 @@ export interface VendorLedgerEntry {
 
 export interface BillItem {
   description: string;
+  /** Harmonized System code for the line - optional, absent on older bills. */
+  hs_code?: string | null;
   qty: number;
   rate: number;
   amount: number;
