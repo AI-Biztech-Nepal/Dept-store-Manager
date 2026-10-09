@@ -854,11 +854,14 @@ function TransactionForm({
     if (isBill) {
       const validItems = items.filter(isSavableItem);
       if (validItems.length === 0) {
-        showAlert('Add at least one item', 'Enter a description, quantity, and rate for at least one item.');
+        showAlert('Add at least one item', 'Enter a description and a quantity for at least one item. The rate can be left blank.');
         return;
       }
-      if (grandTotal <= 0) {
-        showAlert('Check the total', 'The grand total must be more than zero — check item amounts and discount/VAT.');
+      // A bill with no rates yet (amount 0) is fine - it records the goods and
+      // moves stock, and the amount can be filled in later by editing it. Only a
+      // negative total (discount bigger than the items) is a mistake.
+      if (grandTotal < 0) {
+        showAlert('Check the total', 'The discount is more than the items add up to — check the discount and VAT.');
         return;
       }
       if (!customerId && !partyName.trim()) {
