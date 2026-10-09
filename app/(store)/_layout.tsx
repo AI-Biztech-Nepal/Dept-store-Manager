@@ -7,6 +7,18 @@ import { PortalHeaderBar } from '../../lib/components/PortalHeaderBar';
 import { ROLE_ACCENT } from '../../lib/constants/roleColors';
 import { WebSidebarShell, WEB_SIDEBAR_MIN_WIDTH, type WebNavItem } from '../../lib/components/web/WebSidebarShell';
 import { shortcuts as financeShortcuts } from '../../lib/components/finance/FinanceDashboardScreen';
+import { ENTRY_KINDS } from '../../lib/components/finance/entryKinds';
+
+// Received, Payment Out, Sales, Purchase and Expenses are already reachable from the Day Book's
+// "New entry" menu, so the side panel doesn't repeat them.
+const DAYBOOK_ENTRY_KEYS = new Set(ENTRY_KINDS.map((kind) => kind.key));
+
+// The order Finance's pages run down the side panel. Anything not named here goes after them.
+const FINANCE_NAV_ORDER = ['daybook', 'customers', 'transactions', 'inventory', 'report', 'bank-accounts'];
+const financeNavRank = (key: string) => {
+  const i = FINANCE_NAV_ORDER.indexOf(key);
+  return i === -1 ? FINANCE_NAV_ORDER.length : i;
+};
 
 // Every report there is (the same list the Report page itself shows, see ReportScreen.tsx),
 // nested under Report in the side panel so each is one click away.
@@ -25,12 +37,15 @@ const NAV_ITEMS: WebNavItem[] = [
     href: '/(store)/finance',
     label: 'Dashboard',
     icon: 'wallet',
-    children: financeShortcuts('/(store)').map((s) => ({
-      href: s.href,
-      label: s.label,
-      icon: s.icon,
-      ...(s.key === 'report' ? { children: REPORT_FAMILY } : null),
-    })),
+    children: financeShortcuts('/(store)')
+      .filter((s) => !DAYBOOK_ENTRY_KEYS.has(s.key))
+      .sort((a, b) => financeNavRank(a.key) - financeNavRank(b.key))
+      .map((s) => ({
+        href: s.href,
+        label: s.label,
+        icon: s.icon,
+        ...(s.key === 'report' ? { children: REPORT_FAMILY } : null),
+      })),
   },
 ];
 

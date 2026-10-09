@@ -10,7 +10,6 @@ import { useAccountBalances, isSettledOnTheSpot } from '../../hooks/useAccountBa
 import { WEB_SIDEBAR_MIN_WIDTH } from '../web/WebSidebarShell';
 import { MONEY, type MoneyTone } from './moneyColors';
 import { CARD_SHADOW, Card, RecentActivityCard, SalesTrendCard } from './dashboard/FinanceDashboard';
-import { ENTRY_KINDS } from './entryKinds';
 
 const BLUE = '#2563EB';
 
