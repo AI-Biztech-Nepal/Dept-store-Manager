@@ -146,7 +146,13 @@ export function TransactionsBook({
       right: () => (
         <>
           {showTabs && <FilterTabs options={filters} value={filter} onChange={(f) => live.current.onFilter(f)} />}
-          <DateFilterButton from={from} to={to} onApply={setRange} />
+          <DateFilterButton
+            dropdown
+            from={from}
+            to={to}
+            onApply={setRange}
+            shortcuts={[{ label: 'All time', on: !from && !to, onSelect: () => setRange('', '') }]}
+          />
         </>
       ),
     },
