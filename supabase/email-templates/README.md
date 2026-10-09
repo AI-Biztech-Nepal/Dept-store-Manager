@@ -72,8 +72,11 @@ link instead.
 **Authentication -> Sign In / Providers -> Email** (dashboard labels move
 around between releases; look for these names):
 
-- **Confirm email: on.** (It is on for this project today.) This is what makes
-  Supabase require the code before an account can sign in.
+- **Confirm email: on.** This is what makes Supabase require the code before an
+  account can sign in. Switch it on **last**, once steps 0-2 work: with it on and
+  no working mail provider, nobody can finish signing up. When this was last
+  checked it was **off** (new accounts were confirmed instantly), so anyone could
+  register with an address they don't own.
 - **Email OTP length: 6.** The app expects 6 digits (`OTP_LENGTH` in
   `lib/utils/authFlow.ts`; change both together).
 - **Email OTP expiration:** the default is long. Ten minutes (600 s) is
